@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: second-brain
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    healthCheckPath: /api/health
+    autoDeploy: true
+    disk:
+      name: second-brain-data
+      mountPath: /app/data
+      sizeGB: 1
+    envVars:
+      - key: APP_PASSWORD
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_MODEL
+        value: google/gemini-2.5-flash
+      - key: OPENROUTER_VISION_MODEL
+        value: google/gemini-2.5-flash
+      - key: OPENROUTER_STT_MODEL
+        value: openai/whisper-1

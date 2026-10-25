@@ -1,0 +1,727 @@
+import { useEffect, useState, type FormEvent } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  ArrowUpRight,
+  Check,
+  CheckCircle2,
+  Copy,
+  Download,
+  Eye,
+  EyeOff,
+  HardDrive,
+  Info,
+  KeyRound,
+  Loader2,
+  LogOut,
+  Moon,
+  ShieldCheck,
+  Smartphone,
+  Sparkles,
+  Sun,
+  Trash2,
+  Wifi,
+} from 'lucide-react'
+import { DEFAULT_MODELS, type AISettingsInfo } from '../../shared/types'
+import { api } from '../lib/api'
+import { qk, useAiSettings } from '../lib/hooks'
+import { useInstallPrompt, isStandalone } from '../lib/pwa'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
+import { todayIso } from '../lib/date'
+import { useTheme } from '../context/ThemeContext'
+import { useToast } from '../context/ToastContext'
+import { useConfirm } from '../context/ConfirmContext'
+import { Badge, PageHeader } from '../components/ui'
+
+interface TestResult {
+  ok: boolean
+  message: string
+  model: string
+}
+
+const MODEL_OPTIONS = [
+  'google/gemini-2.5-flash',
+  'google/gemini-2.5-pro',
+  'openai/gpt-4o-mini',
+  'openai/gpt-4o',
+  'anthropic/claude-sonnet-4',
+]
+
+const STT_OPTIONS = ['openai/whisper-1', 'openai/gpt-4o-mini-transcribe', 'openai/gpt-4o-transcribe']
+
+async function copyToClipboard(value: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value)
+      return true
+    }
+  } catch {
+    // fall back to the legacy path
+  }
+  try {
+    const area = document.createElement('textarea')
+    area.value = value
+    area.setAttribute('readonly', '')
+    area.style.position = 'fixed'
+    area.style.opacity = '0'
+    document.body.appendChild(area)
+    area.select()
+    const copied = document.execCommand('copy')
+    area.remove()
+    return copied
+  } catch {
+    return false
+  }
+}
+
+export function SettingsPage() {
+  useDocumentTitle('Настройки')
+  const queryClient = useQueryClient()
+  const { showToast } = useToast()
+  const confirm = useConfirm()
+  const { theme, setTheme } = useTheme()
+  const aiSettings = useAiSettings()
+  const install = useInstallPrompt()
+
+  const authQuery = useQuery({
+    queryKey: qk.auth,
+    queryFn: () => api.auth.me(),
+    retry: false,
+    staleTime: 60_000,
+  })
+
+  const [apiKey, setApiKey] = useState('')
+  const [textModel, setTextModel] = useState('')
+  const [visionModel, setVisionModel] = useState('')
+  const [sttModel, setSttModel] = useState('')
+  const [formInitialized, setFormInitialized] = useState(false)
+  const [showKey, setShowKey] = useState(false)
+  const [testResult, setTestResult] = useState<TestResult | null>(null)
+  const [copied, setCopied] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [loggingOut, setLoggingOut] = useState(false)
+
+  const configured = Boolean(aiSettings.data?.configured)
+  const source = aiSettings.data?.source
+  const origin = typeof window === 'undefined' ? '' : window.location.origin
+  const standalone = isStandalone()
+  const isIos =
+    typeof navigator !== 'undefined' &&
+    (/iPad|iPhone|iPod/.test(navigator.userAgent) ||
+      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1))
+
+  useEffect(() => {
+    const info = aiSettings.data
+    if (!info || formInitialized) return
+    setTextModel(info.text_model)
+    setVisionModel(info.vision_model)
+    setSttModel(info.stt_model)
+    setFormInitialized(true)
+  }, [aiSettings.data, formInitialized])
+
+  const applyInfo = (info: AISettingsInfo) => {
+    queryClient.setQueryData(qk.aiSettings, info)
+    setTextModel(info.text_model)
+    setVisionModel(info.vision_model)
+    setSttModel(info.stt_model)
+    setFormInitialized(true)
+  }
+
+  const saveMutation = useMutation({
+    mutationFn: () =>
+      api.ai.saveSettings({
+        apiKey: apiKey.trim() || undefined,
+        textModel: textModel.trim() || undefined,
+        visionModel: visionModel.trim() || undefined,
+        sttModel: sttModel.trim() || undefined,
+      }),
+    onSuccess: (info) => {
+      applyInfo(info)
+      setApiKey('')
+      setShowKey(false)
+      setTestResult(null)
+      showToast('Настройки ИИ сохранены.', 'success')
+    },
+    onError: (error) => {
+      showToast(error instanceof Error ? error.message : 'Не удалось сохранить настройки.', 'error')
+    },
+  })
+
+  const clearMutation = useMutation({
+    mutationFn: () => api.ai.saveSettings({ clearKey: true }),
+    onSuccess: (info) => {
+      applyInfo(info)
+      setTestResult(null)
+      showToast('Ключ удалён. ИИ-функции выключены.', 'success')
+    },
+    onError: (error) => {
+      showToast(error instanceof Error ? error.message : 'Не удалось удалить ключ.', 'error')
+    },
+  })
+
+  const testMutation = useMutation({
+    mutationFn: () => api.ai.test(),
+    onSuccess: (result) => {
+      setTestResult(result)
+      showToast(result.ok ? 'ИИ отвечает — всё готово.' : result.message, result.ok ? 'success' : 'error')
+    },
+    onError: (error) => {
+      const message = error instanceof Error ? error.message : 'Не удалось проверить связь.'
+      setTestResult({ ok: false, message, model: aiSettings.data?.text_model || '' })
+      showToast(message, 'error')
+    },
+  })
+
+  const submitAi = (event: FormEvent) => {
+    event.preventDefault()
+    if (saveMutation.isPending) return
+    saveMutation.mutate()
+  }
+
+  const resetModels = () => {
+    setTextModel(DEFAULT_MODELS.text)
+    setVisionModel(DEFAULT_MODELS.vision)
+    setSttModel(DEFAULT_MODELS.stt)
+    setTestResult(null)
+    showToast('Стандартные модели подставлены. Сохрани настройки.', 'info')
+  }
+
+  const handleClearKey = async () => {
+    const confirmed = await confirm({
+      title: 'Убрать ключ OpenRouter?',
+      description:
+        'ИИ-разбор инбокса, голосовые расшифровки, семантический поиск и итоги недели перестанут работать, пока не добавишь ключ снова.',
+      confirmLabel: 'Убрать ключ',
+      danger: true,
+    })
+    if (confirmed) clearMutation.mutate()
+  }
+
+  const copyAddress = async () => {
+    const ok = await copyToClipboard(origin)
+    if (!ok) {
+      showToast('Не удалось скопировать. Выдели адрес вручную.', 'error')
+      return
+    }
+    setCopied(true)
+    showToast('Адрес скопирован.', 'success')
+    window.setTimeout(() => setCopied(false), 1600)
+  }
+
+  const handleInstall = async () => {
+    const accepted = await install.promptInstall()
+    showToast(
+      accepted ? 'Приложение установлено.' : 'Установку можно повторить позже.',
+      accepted ? 'success' : 'info',
+    )
+  }
+
+  const handleExport = async () => {
+    if (exporting) return
+    setExporting(true)
+    try {
+      const blob = await api.exportData()
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `second-brain-${todayIso()}.json`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+      showToast('Резервная копия скачана.', 'success')
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Не удалось экспортировать данные.', 'error')
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const handleLogout = async () => {
+    const confirmed = await confirm({
+      title: 'Выйти из приложения?',
+      description: 'На этом устройстве снова потребуется пароль. Данные останутся на месте.',
+      confirmLabel: 'Выйти',
+      danger: true,
+    })
+    if (!confirmed) return
+    setLoggingOut(true)
+    try {
+      await api.auth.logout()
+      window.location.reload()
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Не удалось выйти.', 'error')
+      setLoggingOut(false)
+    }
+  }
+
+  const authPending = authQuery.isPending
+  const authRequired = Boolean(authQuery.data?.auth_required)
+  const loggedIn = Boolean(authQuery.data?.authenticated)
+
+  return (
+    <div className="settings-page">
+      <PageHeader
+        eyebrow="Твой кабинет"
+        title="Настройки"
+        description="Подключи ИИ, выбери оформление и открой доступ с телефона. Всё остальное уже работает."
+        actions={
+          <span className={`ai-status-pill ${configured ? 'is-ready' : ''}`}>
+            <Sparkles size={14} />
+            <span>{configured ? 'ИИ подключён' : 'ИИ не подключён'}</span>
+          </span>
+        }
+      />
+
+      <div className="settings-layout">
+        <div className="settings-main">
+          <section className="settings-card ai-settings-card">
+            <div className="settings-card-head">
+              <span className="settings-orb">
+                <Sparkles size={18} />
+              </span>
+              <div className="settings-card-head-copy">
+                <h2>Искусственный интеллект</h2>
+                <p>
+                  OpenRouter разбирает записи инбокса, расшифровывает голос, ищет по смыслу и
+                  собирает итоги недели.
+                </p>
+              </div>
+              <Badge tone={configured ? 'green' : 'amber'} dot>
+                {configured ? 'Активен' : 'Нужен ключ'}
+              </Badge>
+            </div>
+
+            <form className="ai-settings-form" onSubmit={submitAi}>
+              <div className="ai-key-block">
+                <div className="ai-key-status">
+                  <KeyRound size={15} />
+                  {configured ? (
+                    <span>
+                      Ключ подключён <strong>{aiSettings.data?.key_hint}</strong>{' '}
+                      {source === 'env' ? '· из .env' : '· хранится в приложении'}
+                    </span>
+                  ) : (
+                    <span>Ключа пока нет — ИИ-функции выключены, всё остальное работает.</span>
+                  )}
+                </div>
+                <div className="ai-key-row">
+                  <input
+                    className="input mono ai-key-input"
+                    type={showKey ? 'text' : 'password'}
+                    value={apiKey}
+                    onChange={(event) => setApiKey(event.target.value)}
+                    placeholder={
+                      configured ? 'Новый ключ, чтобы заменить текущий' : 'sk-or-v1-…'
+                    }
+                    autoComplete="off"
+                    spellCheck={false}
+                    aria-label="Ключ OpenRouter"
+                  />
+                  <button
+                    type="button"
+                    className="icon-btn ai-key-reveal"
+                    onClick={() => setShowKey((value) => !value)}
+                    aria-label={showKey ? 'Скрыть ключ' : 'Показать ключ'}
+                  >
+                    {showKey ? <EyeOff size={17} /> : <Eye size={17} />}
+                  </button>
+                </div>
+                <div className="ai-key-actions">
+                  <a
+                    className="text-link"
+                    href="https://openrouter.ai/keys"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Получить ключ на OpenRouter
+                    <ArrowUpRight size={13} />
+                  </a>
+                  {configured && source !== 'env' && (
+                    <button
+                      type="button"
+                      className="ai-key-clear"
+                      onClick={handleClearKey}
+                      disabled={clearMutation.isPending}
+                    >
+                      {clearMutation.isPending ? (
+                        <Loader2 size={13} className="spin" />
+                      ) : (
+                        <Trash2 size={13} />
+                      )}
+                      Убрать ключ
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {source === 'env' && (
+                <div className="inline-note is-warning">
+                  <Info size={15} />
+                  <span>
+                    Ключ задан в <code>.env</code> и имеет приоритет. Чтобы менять его здесь,
+                    удали <code>OPENROUTER_API_KEY</code> из файла и перезапусти сервер.
+                  </span>
+                </div>
+              )}
+
+              <div className="ai-model-grid">
+                <label className="field">
+                  <span className="field-label">Текстовая модель</span>
+                  <input
+                    className="input mono"
+                    value={textModel}
+                    onChange={(event) => setTextModel(event.target.value)}
+                    placeholder={DEFAULT_MODELS.text}
+                    list="ai-model-options"
+                    spellCheck={false}
+                  />
+                  <span className="field-hint">Разбор записей и итоги недели</span>
+                </label>
+                <label className="field">
+                  <span className="field-label">Модель для фото</span>
+                  <input
+                    className="input mono"
+                    value={visionModel}
+                    onChange={(event) => setVisionModel(event.target.value)}
+                    placeholder={DEFAULT_MODELS.vision}
+                    list="ai-model-options"
+                    spellCheck={false}
+                  />
+                  <span className="field-hint">Фото доски, скриншоты, документы</span>
+                </label>
+                <label className="field">
+                  <span className="field-label">Расшифровка голоса</span>
+                  <input
+                    className="input mono"
+                    value={sttModel}
+                    onChange={(event) => setSttModel(event.target.value)}
+                    placeholder={DEFAULT_MODELS.stt}
+                    list="ai-stt-options"
+                    spellCheck={false}
+                  />
+                  <span className="field-hint">Голосовые записи из инбокса</span>
+                </label>
+              </div>
+
+              <datalist id="ai-model-options">
+                {MODEL_OPTIONS.map((model) => (
+                  <option value={model} key={model} />
+                ))}
+              </datalist>
+              <datalist id="ai-stt-options">
+                {STT_OPTIONS.map((model) => (
+                  <option value={model} key={model} />
+                ))}
+              </datalist>
+
+              <div className="ai-actions">
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={saveMutation.isPending}
+                >
+                  {saveMutation.isPending ? (
+                    <Loader2 size={16} className="spin" />
+                  ) : (
+                    <Check size={16} />
+                  )}
+                  Сохранить
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => testMutation.mutate()}
+                  disabled={!configured || testMutation.isPending || saveMutation.isPending}
+                >
+                  {testMutation.isPending ? (
+                    <Loader2 size={16} className="spin" />
+                  ) : (
+                    <Wifi size={16} />
+                  )}
+                  Проверить связь
+                </button>
+                <button type="button" className="btn btn-text ai-reset-models" onClick={resetModels}>
+                  Стандартные модели
+                </button>
+              </div>
+
+              {testResult && (
+                <div className={`ai-test-result ${testResult.ok ? 'is-ok' : 'is-error'}`}>
+                  {testResult.ok ? <CheckCircle2 size={15} /> : <Info size={15} />}
+                  <span>{testResult.message}</span>
+                </div>
+              )}
+
+              <p className="settings-footnote">
+                Ключ хранится только в локальной базе на этом компьютере и не попадает в экспорт.
+                Запросы идут напрямую в OpenRouter.
+              </p>
+            </form>
+          </section>
+
+          <section className="settings-card">
+            <div className="settings-card-head">
+              <span className="settings-orb is-coral">
+                <Sun size={18} />
+              </span>
+              <div className="settings-card-head-copy">
+                <h2>Оформление</h2>
+                <p>Светлая бумага днём, тёмный кабинет вечером. Выбор сохраняется на устройстве.</p>
+              </div>
+            </div>
+
+            <div className="theme-options">
+              <button
+                type="button"
+                className={`theme-option ${theme === 'light' ? 'is-active' : ''}`}
+                onClick={() => setTheme('light')}
+                aria-pressed={theme === 'light'}
+              >
+                <span className="theme-preview is-light">
+                  <span className="theme-preview-side" />
+                  <span className="theme-preview-lines">
+                    <i />
+                    <i />
+                    <i />
+                  </span>
+                </span>
+                <span className="theme-option-copy">
+                  <strong>Светлая</strong>
+                  <small>Тёплая бумага</small>
+                </span>
+                {theme === 'light' && <Check size={15} className="theme-option-check" />}
+              </button>
+              <button
+                type="button"
+                className={`theme-option ${theme === 'dark' ? 'is-active' : ''}`}
+                onClick={() => setTheme('dark')}
+                aria-pressed={theme === 'dark'}
+              >
+                <span className="theme-preview is-dark">
+                  <span className="theme-preview-side" />
+                  <span className="theme-preview-lines">
+                    <i />
+                    <i />
+                    <i />
+                  </span>
+                </span>
+                <span className="theme-option-copy">
+                  <strong>Тёмная</strong>
+                  <small>Мягкий полумрак</small>
+                </span>
+                {theme === 'dark' && <Check size={15} className="theme-option-check" />}
+              </button>
+            </div>
+          </section>
+
+          <section className="settings-card">
+            <div className="settings-card-head">
+              <span className="settings-orb is-blue">
+                <HardDrive size={18} />
+              </span>
+              <div className="settings-card-head-copy">
+                <h2>Данные</h2>
+                <p>Всё хранится локально. Снимок данных можно забрать с собой в любой момент.</p>
+              </div>
+            </div>
+
+            <div className="settings-action">
+              <span className="settings-action-icon tone-blue">
+                <Download size={17} />
+              </span>
+              <span className="settings-action-copy">
+                <strong>Резервная копия в JSON</strong>
+                <span>Заметки, задачи, привычки, события, инбокс и вложения.</span>
+              </span>
+              <button
+                type="button"
+                className="btn btn-ghost btn-small"
+                onClick={handleExport}
+                disabled={exporting}
+              >
+                {exporting ? (
+                  <Loader2 size={14} className="spin" />
+                ) : (
+                  <Download size={14} />
+                )}
+                Скачать
+              </button>
+            </div>
+
+            <p className="settings-footnote">
+              Файл не содержит ключ OpenRouter и пароль. Это снимок данных — вложения в нём
+              указаны ссылками, поэтому для полной копии сохрани ещё папку <code>data</code>.
+            </p>
+          </section>
+        </div>
+
+        <aside className="settings-aside">
+          <section className="settings-card">
+            <div className="settings-card-head">
+              <span className="settings-orb is-green">
+                <Smartphone size={18} />
+              </span>
+              <div className="settings-card-head-copy">
+                <h2>С телефона</h2>
+                <p>Открой приложение рядом с компьютером и добавь его на главный экран.</p>
+              </div>
+            </div>
+
+            <div className="device-address">
+              <Wifi size={15} />
+              <code>{origin}</code>
+              <button
+                type="button"
+                className="device-copy"
+                onClick={copyAddress}
+                aria-label="Скопировать адрес"
+                title="Скопировать адрес"
+              >
+                {copied ? <Check size={15} /> : <Copy size={15} />}
+              </button>
+            </div>
+
+            <ol className="device-steps">
+              <li>
+                <span className="device-step-num">1</span>
+                <span>Подключи телефон к той же Wi-Fi сети, что и компьютер.</span>
+              </li>
+              <li>
+                <span className="device-step-num">2</span>
+                <span>Открой этот адрес в браузере телефона.</span>
+              </li>
+              <li>
+                <span className="device-step-num">3</span>
+                <span>
+                  {isIos
+                    ? 'Нажми «Поделиться» → «На экран „Домой“».'
+                    : 'Открой меню браузера и выбери «Установить приложение».'}
+                </span>
+              </li>
+            </ol>
+
+            {standalone ? (
+              <div className="settings-state is-ready">
+                <CheckCircle2 size={16} />
+                Приложение открыто как установленное
+              </div>
+            ) : install.available ? (
+              <button
+                type="button"
+                className="btn btn-soft btn-block settings-install-btn"
+                onClick={handleInstall}
+              >
+                <Download size={16} />
+                Установить приложение
+              </button>
+            ) : (
+              <div className="settings-install-hint">
+                <Download size={15} />
+                <span>
+                  Кнопка установки появится в Chrome или Edge, когда приложение открыто по HTTPS
+                  или на localhost.
+                </span>
+              </div>
+            )}
+
+            <div className="inline-note is-warning">
+              <ShieldCheck size={15} />
+              <span>
+                Микрофон и установка как приложение требуют <b>HTTPS</b> или <b>localhost</b>. По
+                локальному HTTP фото и файлы работают, а голос можно прикрепить записью с
+                диктофона.
+              </span>
+            </div>
+          </section>
+
+          <section className="settings-card">
+            <div className="settings-card-head">
+              <span className="settings-orb is-neutral">
+                <ShieldCheck size={18} />
+              </span>
+              <div className="settings-card-head-copy">
+                <h2>Доступ</h2>
+                <p>Пароль защищает кабинет от чужих устройств в сети.</p>
+              </div>
+            </div>
+
+            {authPending ? (
+              <div className="settings-access-row">
+                <span className="settings-access-icon is-open">
+                  <Loader2 size={16} className="spin" />
+                </span>
+                <div className="settings-access-copy">
+                  <strong>Проверяю доступ…</strong>
+                  <span>Секунду.</span>
+                </div>
+              </div>
+            ) : (
+              <div className="settings-access-row">
+                <span className={`settings-access-icon ${authRequired ? 'is-locked' : 'is-open'}`}>
+                  {authRequired ? <ShieldCheck size={16} /> : <Info size={16} />}
+                </span>
+                <div className="settings-access-copy">
+                  <strong>{authRequired ? 'Вход по паролю включён' : 'Открытый доступ'}</strong>
+                  <span>
+                    {authRequired
+                      ? 'Сессия хранится в защищённой cookie. Выйти можно на каждом устройстве отдельно.'
+                      : 'Любое устройство в этой сети может открыть приложение без пароля.'}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {authRequired && loggedIn && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-small settings-logout"
+                onClick={handleLogout}
+                disabled={loggingOut}
+              >
+                {loggingOut ? <Loader2 size={14} className="spin" /> : <LogOut size={14} />}
+                Выйти на этом устройстве
+              </button>
+            )}
+
+            <p className="settings-footnote">
+              Пароль задаётся переменной <code>APP_PASSWORD</code> в <code>.env</code>. После
+              изменения перезапусти сервер.
+            </p>
+          </section>
+
+          <section className="settings-card">
+            <div className="settings-card-head">
+              <span className="settings-orb is-neutral">
+                <Sparkles size={18} />
+              </span>
+              <div className="settings-card-head-copy">
+                <h2>О приложении</h2>
+                <p>Личный кабинет для мыслей, планов и всего важного.</p>
+              </div>
+            </div>
+
+            <div className="settings-about-list">
+              <div className="settings-about-row">
+                <span>Версия</span>
+                <strong>1.0</strong>
+              </div>
+              <div className="settings-about-row">
+                <span>Хранилище</span>
+                <strong>SQLite · локально</strong>
+              </div>
+              <div className="settings-about-row">
+                <span>Синхронизация</span>
+                <strong>WebSocket</strong>
+              </div>
+            </div>
+
+            <p className="settings-footnote">
+              Данные и вложения остаются на твоём компьютере. В интернет уходят только запросы к
+              OpenRouter, когда работает ИИ.
+            </p>
+          </section>
+        </aside>
+      </div>
+    </div>
+  )
+}
