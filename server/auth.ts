@@ -9,8 +9,31 @@ const failedAttempts = new Map<string, { count: number; resetAt: number }>()
 const MAX_ATTEMPTS = 20
 const ATTEMPT_WINDOW_MS = 10 * 60 * 1000
 
-export function isAuthRequired(): boolean {
+export function isPasswordEnabled(): boolean {
   return Boolean((process.env.APP_PASSWORD || '').trim())
+}
+
+export function isGoogleEnabled(): boolean {
+  return Boolean(
+    (process.env.GOOGLE_CLIENT_ID || '').trim() && (process.env.GOOGLE_CLIENT_SECRET || '').trim(),
+  )
+}
+
+export function isAuthRequired(): boolean {
+  return isPasswordEnabled() || isGoogleEnabled()
+}
+
+export function getGoogleConfig() {
+  return {
+    clientId: (process.env.GOOGLE_CLIENT_ID || '').trim(),
+    clientSecret: (process.env.GOOGLE_CLIENT_SECRET || '').trim(),
+    ownerEmail: (process.env.OWNER_EMAIL || '').trim(),
+  }
+}
+
+export function isOwnerEmail(email: string): boolean {
+  const owner = getGoogleConfig().ownerEmail.toLowerCase()
+  return Boolean(owner) && email.trim().toLowerCase() === owner
 }
 
 export function createSession(): string {
@@ -79,17 +102,17 @@ export function clearFailedLogins(ip: string): void {
 
 export function verifyPassword(input: string): boolean {
   const expected = (process.env.APP_PASSWORD || '').trim()
-  if (!expected) return true
+  if (!expected) return false
   if (typeof input !== 'string') return false
   const hash = (value: string) => createHash('sha256').update(value, 'utf8').digest()
   return timingSafeEqual(hash(input), hash(expected))
 }
 
-export function sessionCookieOptions() {
+export function sessionCookieOptions(req?: Request) {
   return {
     httpOnly: true,
     sameSite: 'lax' as const,
-    secure: false,
+    secure: Boolean(req?.secure),
     path: '/',
     maxAge: SESSION_TTL_MS,
   }

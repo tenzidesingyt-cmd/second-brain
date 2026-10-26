@@ -73,7 +73,7 @@ export default function App() {
     )
   }
   if (auth.data?.auth_required && !auth.data.authenticated) {
-    return <LoginPage />
+    return <LoginPage auth={auth.data} />
   }
 
   return (

@@ -15,11 +15,14 @@ import {
   destroySession,
   isAuthRequired,
   isAuthenticated,
+  isGoogleEnabled,
+  isPasswordEnabled,
   registerFailedLogin,
   requireAuth,
   sessionCookieOptions,
   verifyPassword,
 } from './auth'
+import authRouter from './routes/auth'
 import { attachRealtime } from './realtime'
 import { resetStuckInbox } from './ai'
 import inboxRouter from './routes/inbox'
@@ -35,6 +38,7 @@ const server = http.createServer(app)
 const port = Number(process.env.PORT) || 8787
 
 app.disable('x-powered-by')
+app.set('trust proxy', 1)
 app.use(cookieParser())
 app.use(express.json({ limit: '2mb' }))
 
@@ -46,10 +50,16 @@ app.get('/api/auth/me', (req, res) => {
   res.json({
     auth_required: isAuthRequired(),
     authenticated: isAuthenticated(req),
+    google_enabled: isGoogleEnabled(),
+    password_enabled: isPasswordEnabled(),
   })
 })
 
 app.post('/api/auth/login', (req, res) => {
+  if (!isPasswordEnabled()) {
+    res.status(400).json({ error: 'Вход по паролю отключён. Используйте вход через Google.' })
+    return
+  }
   const ip = req.ip || req.socket.remoteAddress || 'unknown'
   if (!checkLoginAllowed(ip)) {
     res.status(429).json({ error: 'Слишком много попыток. Подождите 10 минут.' })
@@ -63,7 +73,7 @@ app.post('/api/auth/login', (req, res) => {
   }
   clearFailedLogins(ip)
   const token = createSession()
-  res.cookie(SESSION_COOKIE, token, sessionCookieOptions())
+  res.cookie(SESSION_COOKIE, token, sessionCookieOptions(req))
   res.json({ ok: true })
 })
 
@@ -72,6 +82,8 @@ app.post('/api/auth/logout', (req, res) => {
   res.clearCookie(SESSION_COOKIE, { path: '/', httpOnly: true, sameSite: 'lax' })
   res.json({ ok: true })
 })
+
+app.use('/api/auth', authRouter)
 
 app.use('/api', requireAuth)
 app.use('/api/inbox', inboxRouter)
@@ -169,6 +181,11 @@ server.listen(port, '0.0.0.0', () => {
     console.log(`  С телефона:  http://${address}:${webPort}`)
   }
   console.log(`  API:         http://localhost:${port}/api`)
-  if (isAuthRequired()) console.log('  Вход по паролю включён (APP_PASSWORD).')
+  if (isPasswordEnabled()) console.log('  Вход по паролю включён (APP_PASSWORD).')
+  if (isGoogleEnabled()) {
+    console.log('  Вход через Google включён.')
+  } else if (isAuthRequired()) {
+    console.log('  Google-вход не настроен: задайте GOOGLE_CLIENT_ID и GOOGLE_CLIENT_SECRET.')
+  }
   console.log('')
 })

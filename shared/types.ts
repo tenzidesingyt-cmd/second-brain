@@ -170,6 +170,8 @@ export interface AnalyticsSummaryResponse {
 export interface AuthState {
   auth_required: boolean
   authenticated: boolean
+  google_enabled: boolean
+  password_enabled: boolean
 }
 
 export interface AppSettings {

@@ -749,11 +749,53 @@
   line-height: 1.6;
 }
 
-.login-form {
+.login-methods {
   display: flex;
   flex-direction: column;
   gap: 16px;
   margin-top: 28px;
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.login-error {
+  margin-top: 18px;
+}
+
+.login-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.login-divider::before,
+.login-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+
+.btn-google {
+  background: #fff;
+  border-color: #d9d9d9;
+  color: #1f1f1f;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.btn-google:hover:not(:disabled) {
+  background: #f6f6f6;
+  border-color: #c8c8c8;
+  color: #1f1f1f;
 }
 
 .login-note {

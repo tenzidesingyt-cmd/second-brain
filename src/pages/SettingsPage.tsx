@@ -257,6 +257,8 @@ export function SettingsPage() {
   const authPending = authQuery.isPending
   const authRequired = Boolean(authQuery.data?.auth_required)
   const loggedIn = Boolean(authQuery.data?.authenticated)
+  const googleEnabled = Boolean(authQuery.data?.google_enabled)
+  const passwordEnabled = Boolean(authQuery.data?.password_enabled)
 
   return (
     <div className="settings-page">
@@ -661,11 +663,23 @@ export function SettingsPage() {
                   {authRequired ? <ShieldCheck size={16} /> : <Info size={16} />}
                 </span>
                 <div className="settings-access-copy">
-                  <strong>{authRequired ? 'Вход по паролю включён' : 'Открытый доступ'}</strong>
+                  <strong>
+                    {googleEnabled
+                      ? passwordEnabled
+                        ? 'Google и пароль включены'
+                        : 'Вход через Google включён'
+                      : authRequired
+                        ? 'Вход по паролю включён'
+                        : 'Открытый доступ'}
+                  </strong>
                   <span>
-                    {authRequired
-                      ? 'Сессия хранится в защищённой cookie. Выйти можно на каждом устройстве отдельно.'
-                      : 'Любое устройство в этой сети может открыть приложение без пароля.'}
+                    {googleEnabled
+                      ? passwordEnabled
+                        ? 'Основной вход — через Google, пароль работает как резервный. Выйти можно на каждом устройстве отдельно.'
+                        : 'Доступ только для Google-аккаунта владельца кабинета. Выйти можно на каждом устройстве отдельно.'
+                      : authRequired
+                        ? 'Сессия хранится в защищённой cookie. Выйти можно на каждом устройстве отдельно.'
+                        : 'Любое устройство в этой сети может открыть приложение без пароля.'}
                   </span>
                 </div>
               </div>
@@ -684,8 +698,17 @@ export function SettingsPage() {
             )}
 
             <p className="settings-footnote">
-              Пароль задаётся переменной <code>APP_PASSWORD</code> в <code>.env</code>. После
-              изменения перезапусти сервер.
+              {googleEnabled ? (
+                <>
+                  Google-вход задаётся переменными <code>GOOGLE_CLIENT_ID</code>,{' '}
+                  <code>GOOGLE_CLIENT_SECRET</code> и <code>OWNER_EMAIL</code>.
+                </>
+              ) : (
+                <>
+                  Пароль задаётся переменной <code>APP_PASSWORD</code> в <code>.env</code>.
+                </>
+              )}{' '}
+              После изменения перезапусти сервер.
             </p>
           </section>
 
