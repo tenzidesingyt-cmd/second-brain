@@ -218,6 +218,42 @@ export interface AppSettings {
   theme: 'light' | 'dark' | 'system'
 }
 
+export interface NotificationSettingsInfo {
+  timezone: string
+  push_enabled: boolean
+  telegram_enabled: boolean
+  day_before: boolean
+  at_time: boolean
+  push_public_key: string | null
+  push_subscriptions: number
+  telegram_available: boolean
+  telegram_linked: boolean
+  telegram_username: string | null
+  bot_username: string | null
+}
+
+export interface NotificationSettingsPatch {
+  timezone?: string
+  push_enabled?: boolean
+  telegram_enabled?: boolean
+  day_before?: boolean
+  at_time?: boolean
+}
+
+export interface PushSubscriptionInput {
+  endpoint: string
+  keys: {
+    p256dh: string
+    auth: string
+  }
+}
+
+export interface NotificationTestResult {
+  ok: boolean
+  message: string
+  sent: number
+}
+
 export const AI_EDIT_MAX_NOTES = 6
 export const AI_EDIT_MAX_INSTRUCTION = 2000
 

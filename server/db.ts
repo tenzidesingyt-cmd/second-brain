@@ -150,6 +150,41 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
 
+  CREATE TABLE IF NOT EXISTS notification_settings (
+    user_id TEXT PRIMARY KEY,
+    timezone TEXT NOT NULL DEFAULT 'UTC',
+    push_enabled INTEGER NOT NULL DEFAULT 0,
+    telegram_enabled INTEGER NOT NULL DEFAULT 0,
+    day_before INTEGER NOT NULL DEFAULT 1,
+    at_time INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS push_subscriptions (
+    endpoint TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    user_agent TEXT,
+    created_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id);
+
+  CREATE TABLE IF NOT EXISTS reminder_deliveries (
+    user_id TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    reminder_kind TEXT NOT NULL,
+    due_key TEXT NOT NULL,
+    delivered_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, entity_type, entity_id, reminder_kind, due_key)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_reminder_deliveries_at ON reminder_deliveries(delivered_at);
+
   CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
     title, body, tags,
     content='notes', content_rowid='rowid',

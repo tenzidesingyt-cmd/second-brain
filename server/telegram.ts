@@ -55,11 +55,15 @@ export function isTelegramWebhookAuthorized(header: string | undefined): boolean
   return Boolean(header) && safeEqual(String(header), telegramSecret())
 }
 
-function siteUrl(): string {
+export function getPublicSiteUrl(): string {
   const configured = (process.env.PUBLIC_URL || '').trim().replace(/\/+$/, '')
   if (configured) return configured
   const railway = (process.env.RAILWAY_PUBLIC_DOMAIN || '').trim()
   return railway ? `https://${railway}` : ''
+}
+
+function siteUrl(): string {
+  return getPublicSiteUrl()
 }
 
 function ownerTelegramId(): string {
@@ -93,7 +97,7 @@ async function callApi<T = unknown>(method: string, payload?: Record<string, unk
   return body.result as T
 }
 
-async function sendMessage(chatId: number | string, text: string): Promise<void> {
+export async function sendTelegramMessage(chatId: number | string, text: string): Promise<void> {
   await callApi('sendMessage', {
     chat_id: chatId,
     text,
@@ -150,33 +154,33 @@ async function issueCredentials(from: TelegramUser, existing: PublicUser | null)
     touchLastLogin(existing.id)
     const user = getUserById(existing.id) || existing
     if (isOwner(user)) {
-      await sendMessage(telegramId, ownerMessage(password))
+      await sendTelegramMessage(telegramId, ownerMessage(password))
     } else {
-      await sendMessage(telegramId, credentialsMessage(user, password, false))
+      await sendTelegramMessage(telegramId, credentialsMessage(user, password, false))
     }
     return
   }
   const created = createTelegramUser({ telegramId, username, name })
-  await sendMessage(telegramId, credentialsMessage(created.user, created.password, true))
+  await sendTelegramMessage(telegramId, credentialsMessage(created.user, created.password, true))
 }
 
 async function bindOwner(from: TelegramUser, secret: string): Promise<void> {
   const expected = (process.env.APP_PASSWORD || '').trim()
   if (!expected) {
-    await sendMessage(
+    await sendTelegramMessage(
       from.id,
       'Владелец ещё не настроил APP_PASSWORD на сервере, поэтому привязка недоступна. Используйте вход через Google.',
     )
     return
   }
   if (!verifyPassword(secret)) {
-    await sendMessage(from.id, 'Неверный пароль владельца. Используйте команду /owner <пароль> в личном чате.')
+    await sendTelegramMessage(from.id, 'Неверный пароль владельца. Используйте команду /owner <пароль> в личном чате.')
     return
   }
   bindTelegramToOwner(String(from.id), { username: from.username || null, name: displayName(from) })
   const password = resetTelegramPassword(OWNER_USER_ID)
   touchLastLogin(OWNER_USER_ID)
-  await sendMessage(from.id, ownerMessage(password))
+  await sendTelegramMessage(from.id, ownerMessage(password))
 }
 
 function helpMessage(): string {
@@ -206,14 +210,14 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
   const chat = message?.chat
   if (!message || !from || !chat || from.is_bot) return
   if (chat.type !== 'private') {
-    await sendMessage(chat.id, 'Регистрация доступна только в личном чате с ботом.')
+    await sendTelegramMessage(chat.id, 'Регистрация доступна только в личном чате с ботом.')
     return
   }
 
   const telegramId = String(from.id)
   const allowed = allowedTelegramIds()
   if (allowed.size && !allowed.has(telegramId) && telegramId !== ownerTelegramId()) {
-    await sendMessage(chat.id, 'Доступ к боту ограничен. Попросите владельца добавить ваш Telegram ID.')
+    await sendTelegramMessage(chat.id, 'Доступ к боту ограничен. Попросите владельца добавить ваш Telegram ID.')
     return
   }
 
@@ -224,7 +228,7 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
   const existing = findUserByTelegramId(telegramId)
 
   if (command === '/id') {
-    await sendMessage(
+    await sendTelegramMessage(
       chat.id,
       `Ваш Telegram ID: ${telegramId}${from.username ? `\nНик: @${from.username}` : ''}`,
     )
@@ -232,7 +236,7 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
   }
 
   if (command === '/help') {
-    await sendMessage(chat.id, helpMessage())
+    await sendTelegramMessage(chat.id, helpMessage())
     return
   }
 
@@ -249,7 +253,7 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
     bindTelegramToOwner(telegramId, { username: from.username || null, name: displayName(from) })
     const password = resetTelegramPassword(OWNER_USER_ID)
     touchLastLogin(OWNER_USER_ID)
-    await sendMessage(chat.id, ownerMessage(password))
+    await sendTelegramMessage(chat.id, ownerMessage(password))
     return
   }
 
@@ -259,7 +263,7 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
   }
 
   if (existing) {
-    await sendMessage(
+    await sendTelegramMessage(
       chat.id,
       `Вы уже зарегистрированы.\nЛогин: ${existing.login}\n\n/password — новый пароль.\n/help — список команд.`,
     )

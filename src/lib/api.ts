@@ -10,6 +10,10 @@ import type {
   MediaFile,
   Note,
   NotesAiEditResponse,
+  NotificationSettingsInfo,
+  NotificationSettingsPatch,
+  NotificationTestResult,
+  PushSubscriptionInput,
   SearchResponse,
   Task,
   WeekAnalytics,
@@ -227,6 +231,30 @@ export const api = {
       request<AISearchResponse>('/api/search/ai', {
         method: 'POST',
         body: JSON.stringify({ query }),
+      }),
+  },
+
+  notifications: {
+    settings: () => request<NotificationSettingsInfo>('/api/notifications/settings'),
+    saveSettings: (patch: NotificationSettingsPatch) =>
+      request<NotificationSettingsInfo>('/api/notifications/settings', {
+        method: 'PUT',
+        body: JSON.stringify(patch),
+      }),
+    subscribe: (subscription: PushSubscriptionInput) =>
+      request<{ ok: boolean; subscriptions: number }>('/api/notifications/subscriptions', {
+        method: 'POST',
+        body: JSON.stringify(subscription),
+      }),
+    unsubscribe: (endpoint: string) =>
+      request<{ ok: boolean; subscriptions: number }>('/api/notifications/subscriptions', {
+        method: 'DELETE',
+        body: JSON.stringify({ endpoint }),
+      }),
+    test: (channel: 'push' | 'telegram') =>
+      request<NotificationTestResult>('/api/notifications/test', {
+        method: 'POST',
+        body: JSON.stringify({ channel }),
       }),
   },
 

@@ -1,9 +1,11 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowUpRight,
+  BellRing,
   Check,
   CheckCircle2,
+  Clock3,
   Copy,
   Download,
   Eye,
@@ -23,16 +25,28 @@ import {
   Users,
   Wifi,
 } from 'lucide-react'
-import { DEFAULT_MODELS, type AISettingsInfo } from '../../shared/types'
+import {
+  DEFAULT_MODELS,
+  type AISettingsInfo,
+  type NotificationSettingsPatch,
+} from '../../shared/types'
 import { api } from '../lib/api'
 import { qk, useAiSettings } from '../lib/hooks'
-import { useInstallPrompt, isStandalone } from '../lib/pwa'
+import {
+  currentPushEndpoint,
+  isStandalone,
+  notificationPermission,
+  pushSupported,
+  subscribeToPush,
+  unsubscribeFromPush,
+  useInstallPrompt,
+} from '../lib/pwa'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { todayIso } from '../lib/date'
 import { useTheme } from '../context/ThemeContext'
 import { useToast } from '../context/ToastContext'
 import { useConfirm } from '../context/ConfirmContext'
-import { Badge, PageHeader } from '../components/ui'
+import { Badge, PageHeader, Toggle } from '../components/ui'
 
 interface TestResult {
   ok: boolean
@@ -121,6 +135,167 @@ export function SettingsPage() {
     typeof navigator !== 'undefined' &&
     (/iPad|iPhone|iPod/.test(navigator.userAgent) ||
       (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1))
+
+  const notificationsQuery = useQuery({
+    queryKey: qk.notifications,
+    queryFn: () => api.notifications.settings(),
+    staleTime: 30_000,
+  })
+  const notifications = notificationsQuery.data
+  const detectedTimezone = useMemo(
+    () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+    [],
+  )
+  const [notificationTimezone, setNotificationTimezone] = useState('')
+  const [timezoneInitialized, setTimezoneInitialized] = useState(false)
+  const [pushOnDevice, setPushOnDevice] = useState(false)
+  const [pushBusy, setPushBusy] = useState(false)
+  const [testingChannel, setTestingChannel] = useState<'push' | 'telegram' | null>(null)
+
+  const timezoneOptions = useMemo(() => {
+    let list: string[] = []
+    try {
+      list = Intl.supportedValuesOf('timeZone')
+    } catch {
+      list = ['UTC']
+    }
+    if (notificationTimezone && !list.includes(notificationTimezone)) {
+      list = [notificationTimezone, ...list]
+    }
+    if (!list.includes('UTC')) list = [...list, 'UTC']
+    return list
+  }, [notificationTimezone])
+
+  useEffect(() => {
+    if (!notifications || timezoneInitialized) return
+    setNotificationTimezone(notifications.timezone || detectedTimezone)
+    setTimezoneInitialized(true)
+  }, [notifications, timezoneInitialized, detectedTimezone])
+
+  useEffect(() => {
+    if (!notifications || !pushSupported()) return
+    let cancelled = false
+    void currentPushEndpoint()
+      .then((endpoint) => {
+        if (!cancelled) setPushOnDevice(Boolean(endpoint))
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [notifications])
+
+  const saveNotificationsMutation = useMutation({
+    mutationFn: (patch: NotificationSettingsPatch) => api.notifications.saveSettings(patch),
+    onSuccess: (info) => {
+      queryClient.setQueryData(qk.notifications, info)
+    },
+    onError: (error) => {
+      if (notifications) setNotificationTimezone(notifications.timezone || detectedTimezone)
+      showToast(
+        error instanceof Error ? error.message : 'Не удалось сохранить настройки уведомлений.',
+        'error',
+      )
+    },
+  })
+
+  const saveNotificationPatch = (patch: NotificationSettingsPatch) => {
+    saveNotificationsMutation.mutate({
+      timezone: notificationTimezone || detectedTimezone,
+      ...patch,
+    })
+  }
+
+  const handleConnectPush = async () => {
+    if (!notifications || pushBusy) return
+    setPushBusy(true)
+    try {
+      const publicKey = notifications.push_public_key
+      if (!publicKey) throw new Error('Сервер не выдал ключ push-уведомлений.')
+      const subscription = await subscribeToPush(publicKey)
+      await api.notifications.subscribe(subscription)
+      const info = await api.notifications.saveSettings({
+        push_enabled: true,
+        timezone: notificationTimezone || detectedTimezone,
+      })
+      queryClient.setQueryData(qk.notifications, info)
+      setPushOnDevice(true)
+      showToast('Push-уведомления включены на этом устройстве.', 'success')
+    } catch (error) {
+      showToast(
+        error instanceof Error ? error.message : 'Не удалось включить push-уведомления.',
+        'error',
+      )
+    } finally {
+      setPushBusy(false)
+    }
+  }
+
+  const handleDisconnectPush = async () => {
+    if (pushBusy) return
+    setPushBusy(true)
+    try {
+      const endpoint = await unsubscribeFromPush()
+      if (endpoint) {
+        const result = await api.notifications.unsubscribe(endpoint)
+        const info = await api.notifications.saveSettings({
+          push_enabled: result.subscriptions > 0,
+          timezone: notificationTimezone || detectedTimezone,
+        })
+        queryClient.setQueryData(qk.notifications, info)
+      }
+      setPushOnDevice(false)
+      showToast('Push-уведомления отключены на этом устройстве.', 'success')
+    } catch (error) {
+      showToast(
+        error instanceof Error ? error.message : 'Не удалось отключить push-уведомления.',
+        'error',
+      )
+    } finally {
+      setPushBusy(false)
+    }
+  }
+
+  const handleTestNotification = async (channel: 'push' | 'telegram') => {
+    if (testingChannel) return
+    setTestingChannel(channel)
+    try {
+      const result = await api.notifications.test(channel)
+      showToast(result.message, 'success')
+    } catch (error) {
+      showToast(
+        error instanceof Error ? error.message : 'Не удалось отправить уведомление.',
+        'error',
+      )
+    } finally {
+      setTestingChannel(null)
+    }
+  }
+
+  const notificationsAvailable = pushSupported()
+  const pushPermission = notificationsAvailable ? notificationPermission() : 'unsupported'
+  const pushSubscriptions = notifications?.push_subscriptions ?? 0
+  const notificationsActive =
+    (Boolean(notifications?.push_enabled) && pushSubscriptions > 0) ||
+    Boolean(notifications?.telegram_enabled)
+  const pushStatus = !notificationsAvailable
+    ? 'Этот браузер не поддерживает push-уведомления.'
+    : pushOnDevice
+      ? `Подключено на этом устройстве${pushSubscriptions > 1 ? ` · всего ${pushSubscriptions}` : ''}`
+      : pushPermission === 'denied'
+        ? 'Уведомления заблокированы в настройках браузера.'
+        : pushSubscriptions > 0
+          ? `Не подключено здесь · всего устройств: ${pushSubscriptions}`
+          : 'Не подключено на этом устройстве.'
+  const telegramReady = Boolean(notifications?.telegram_available)
+  const telegramLinked = Boolean(notifications?.telegram_linked)
+  const telegramStatus = !telegramReady
+    ? 'Telegram-бот не настроен на сервере.'
+    : telegramLinked
+      ? `Кабинет привязан${notifications?.telegram_username ? ` · @${notifications.telegram_username}` : ''}`
+      : isOwner
+        ? 'Отправьте боту /owner <пароль кабинета>, чтобы привязать Telegram.'
+        : 'Напишите боту /start, чтобы получить кабинет с Telegram.'
 
   useEffect(() => {
     const info = aiSettings.data
@@ -504,6 +679,198 @@ export function SettingsPage() {
               </p>
             </form>
             )}
+          </section>
+
+          <section className="settings-card notifications-settings-card">
+            <div className="settings-card-head">
+              <span className="settings-orb is-green">
+                <BellRing size={18} />
+              </span>
+              <div className="settings-card-head-copy">
+                <h2>Уведомления</h2>
+                <p>
+                  Напоминания о задачах и событиях за день и в нужный момент — в браузере и
+                  Telegram.
+                </p>
+              </div>
+              <Badge tone={notificationsActive ? 'green' : 'amber'} dot>
+                {notificationsActive ? 'Включены' : 'Выключены'}
+              </Badge>
+            </div>
+
+            {notificationsQuery.isPending ? (
+              <div className="settings-state">
+                <Loader2 size={16} className="spin" />
+                Загружаю настройки уведомлений…
+              </div>
+            ) : notificationsQuery.isError || !notifications ? (
+              <div className="settings-state is-error">
+                <Info size={16} />
+                Не удалось загрузить настройки уведомлений.
+              </div>
+            ) : (
+              <>
+                <div className="notification-channel">
+                  <span className="settings-action-icon tone-blue">
+                    <BellRing size={17} />
+                  </span>
+                  <span className="settings-action-copy">
+                    <strong>Push в браузере</strong>
+                    <span>{pushStatus}</span>
+                  </span>
+                  {pushOnDevice ? (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-small"
+                      onClick={handleDisconnectPush}
+                      disabled={pushBusy}
+                    >
+                      {pushBusy ? (
+                        <Loader2 size={14} className="spin" />
+                      ) : (
+                        <BellRing size={14} />
+                      )}
+                      Отключить
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn btn-soft btn-small"
+                      onClick={handleConnectPush}
+                      disabled={
+                        pushBusy || !notificationsAvailable || pushPermission === 'denied'
+                      }
+                    >
+                      {pushBusy ? (
+                        <Loader2 size={14} className="spin" />
+                      ) : (
+                        <BellRing size={14} />
+                      )}
+                      Подключить
+                    </button>
+                  )}
+                </div>
+
+                {isIos && !standalone && (
+                  <div className="inline-note is-warning">
+                    <Info size={15} />
+                    <span>
+                      На iPhone push работают после добавления приложения на экран «Домой» (iOS
+                      16.4+).
+                    </span>
+                  </div>
+                )}
+
+                <div className="notification-channel">
+                  <span className="settings-action-icon tone-blue">
+                    <Send size={17} />
+                  </span>
+                  <span className="settings-action-copy">
+                    <strong>Telegram</strong>
+                    <span>{telegramStatus}</span>
+                  </span>
+                  {telegramLinked && telegramReady ? (
+                    <Toggle
+                      checked={Boolean(notifications.telegram_enabled)}
+                      disabled={saveNotificationsMutation.isPending}
+                      onChange={(checked) => saveNotificationPatch({ telegram_enabled: checked })}
+                    />
+                  ) : botUsername ? (
+                    <a
+                      className="btn btn-ghost btn-small"
+                      href={`https://t.me/${botUsername}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      <Send size={14} />
+                      Открыть бота
+                    </a>
+                  ) : null}
+                </div>
+
+                <div className="notification-schedule">
+                  <div className="notification-schedule-row">
+                    <span className="notification-schedule-copy">
+                      <strong>За день до</strong>
+                      <small>В 09:00 по выбранному часовому поясу</small>
+                    </span>
+                    <Toggle
+                      checked={notifications.day_before}
+                      disabled={saveNotificationsMutation.isPending}
+                      onChange={(checked) => saveNotificationPatch({ day_before: checked })}
+                    />
+                  </div>
+                  <div className="notification-schedule-row">
+                    <span className="notification-schedule-copy">
+                      <strong>В момент времени</strong>
+                      <small>Когда наступает время задачи или события</small>
+                    </span>
+                    <Toggle
+                      checked={notifications.at_time}
+                      disabled={saveNotificationsMutation.isPending}
+                      onChange={(checked) => saveNotificationPatch({ at_time: checked })}
+                    />
+                  </div>
+                  <label className="field notification-timezone-field">
+                    <span className="field-label">Часовой пояс напоминаний</span>
+                    <select
+                      className="input"
+                      value={notificationTimezone || detectedTimezone}
+                      onChange={(event) => {
+                        const value = event.target.value
+                        setNotificationTimezone(value)
+                        saveNotificationsMutation.mutate({ timezone: value })
+                      }}
+                      disabled={saveNotificationsMutation.isPending}
+                    >
+                      {timezoneOptions.map((timezone) => (
+                        <option value={timezone} key={timezone}>
+                          {timezone}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="field-hint">
+                      В нём считаются «09:00» и время задач. Сейчас:{' '}
+                      {notificationTimezone || detectedTimezone}.
+                    </span>
+                  </label>
+                </div>
+
+                <div className="notification-test-row">
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-small"
+                    onClick={() => handleTestNotification('push')}
+                    disabled={!pushOnDevice || testingChannel !== null}
+                  >
+                    {testingChannel === 'push' ? (
+                      <Loader2 size={14} className="spin" />
+                    ) : (
+                      <BellRing size={14} />
+                    )}
+                    Проверить push
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-small"
+                    onClick={() => handleTestNotification('telegram')}
+                    disabled={!telegramLinked || !telegramReady || testingChannel !== null}
+                  >
+                    {testingChannel === 'telegram' ? (
+                      <Loader2 size={14} className="spin" />
+                    ) : (
+                      <Clock3 size={14} />
+                    )}
+                    Проверить Telegram
+                  </button>
+                </div>
+              </>
+            )}
+
+            <p className="settings-footnote">
+              Push приходит в браузер и установленное приложение. Telegram-сообщения отправляет
+              бот. Напоминания приходят за день в 09:00 и в момент времени по выбранному поясу.
+            </p>
           </section>
 
           <section className="settings-card">

@@ -4544,6 +4544,92 @@
   flex: none;
 }
 
+.notification-channel {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--surface-2) 30%, var(--surface));
+}
+
+.notification-channel + .notification-channel,
+.settings-card .inline-note + .notification-channel {
+  margin-top: 8px;
+}
+
+.notification-channel .btn {
+  flex: none;
+}
+
+.notification-channel .toggle-wrap {
+  margin-left: auto;
+  flex: none;
+}
+
+.notification-schedule {
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--surface-2) 22%, var(--surface));
+}
+
+.notification-schedule-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 11px;
+}
+
+.notification-schedule-row + .notification-schedule-row,
+.notification-timezone-field {
+  border-top: 1px solid var(--line);
+}
+
+.notification-schedule-copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.notification-schedule-copy strong {
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.notification-schedule-copy small {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.notification-schedule-row .toggle-wrap {
+  margin-left: auto;
+  flex: none;
+}
+
+.notification-timezone-field {
+  padding: 10px 11px;
+}
+
+.notification-timezone-field .input {
+  height: 36px;
+  min-height: 36px;
+  font-size: 11px;
+}
+
+.notification-test-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
 .device-address {
   display: flex;
   align-items: center;
@@ -5346,6 +5432,22 @@
 
   .settings-action .btn {
     width: 100%;
+  }
+
+  .notification-channel {
+    flex-wrap: wrap;
+  }
+
+  .notification-channel .btn {
+    width: 100%;
+  }
+
+  .notification-channel .toggle-wrap {
+    margin-left: 0;
+  }
+
+  .notification-test-row .btn {
+    flex: 1;
   }
 
   .event-date-row {

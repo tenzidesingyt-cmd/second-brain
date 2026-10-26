@@ -38,6 +38,8 @@ import habitsRouter from './routes/habits'
 import eventsRouter from './routes/events'
 import systemRouter from './routes/system'
 import filesRouter from './routes/files'
+import notificationsRouter from './routes/notifications'
+import { isReminderRequestAuthorized, startReminderScheduler, sweepReminders } from './reminders'
 
 const app = express()
 const server = http.createServer(app)
@@ -118,12 +120,27 @@ app.get('/api/auth/users', requireAuth, requireOwner, (_req, res) => {
 app.use('/api/telegram', telegramRouter)
 app.use('/api/auth', authRouter)
 
+app.all('/api/internal/reminders/run', async (req, res) => {
+  if (!(await isReminderRequestAuthorized(req))) {
+    res.status(401).json({ error: 'Неавторизованный запуск напоминаний.' })
+    return
+  }
+  try {
+    const result = await sweepReminders()
+    res.json({ ok: true, ...result })
+  } catch (error) {
+    console.error('[reminders] manual run:', error)
+    res.status(500).json({ error: 'Не удалось выполнить рассылку напоминаний.' })
+  }
+})
+
 app.use('/api', requireAuth)
 app.use('/api/inbox', inboxRouter)
 app.use('/api/notes', notesRouter)
 app.use('/api/tasks', tasksRouter)
 app.use('/api/habits', habitsRouter)
 app.use('/api/events', eventsRouter)
+app.use('/api/notifications', notificationsRouter)
 app.use('/api', filesRouter)
 app.use('/api', systemRouter)
 
@@ -223,4 +240,5 @@ server.listen(port, '0.0.0.0', () => {
   if (isTelegramEnabled()) console.log('  Вход через Telegram-бота включён.')
   console.log('')
   void initTelegram()
+  startReminderScheduler()
 })

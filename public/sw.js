@@ -1,4 +1,4 @@
-const VERSION = 'brain-v1'
+const VERSION = 'brain-v2'
 const SHELL_CACHE = `${VERSION}-shell`
 const ASSET_CACHE = `${VERSION}-assets`
 const SHELL_URLS = ['/', '/manifest.webmanifest', '/icons/icon.svg', '/icons/icon-192.png', '/icons/apple-touch-icon.png']
@@ -71,4 +71,48 @@ self.addEventListener('fetch', (event) => {
   if (isCacheableAsset(url)) {
     event.respondWith(cacheFirstAsset(request))
   }
+})
+
+self.addEventListener('push', (event) => {
+  let data = {}
+  try {
+    data = event.data ? event.data.json() : {}
+  } catch {
+    data = {}
+  }
+  const title = data.title || 'Второй мозг'
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body: data.body || '',
+      icon: '/icons/icon-192.png',
+      badge: '/icons/icon-192.png',
+      tag: data.tag || 'brain-reminder',
+      renotify: true,
+      data: { url: data.url || '/inbox' },
+    }),
+  )
+})
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close()
+  const target = new URL(event.notification.data?.url || '/inbox', self.location.origin).href
+  event.waitUntil(
+    (async () => {
+      const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+      for (const client of windows) {
+        if ('focus' in client) {
+          await client.focus()
+          if ('navigate' in client) {
+            try {
+              await client.navigate(target)
+            } catch {
+              // focus is enough when navigation is not allowed
+            }
+          }
+          return
+        }
+      }
+      await self.clients.openWindow(target)
+    })(),
+  )
 })

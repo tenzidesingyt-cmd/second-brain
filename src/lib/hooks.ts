@@ -14,6 +14,7 @@ export const qk = {
   analytics: ['analytics'] as const,
   analyticsWeek: (weekStart: string) => ['analytics', weekStart] as const,
   aiSettings: ['ai-settings'] as const,
+  notifications: ['notifications'] as const,
   search: (query: string) => ['search', query] as const,
 }
 
