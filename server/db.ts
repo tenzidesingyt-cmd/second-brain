@@ -11,6 +11,7 @@ export const uploadsDir = path.join(dataDir, 'uploads')
 fs.mkdirSync(uploadsDir, { recursive: true })
 
 export const db = new DatabaseSync(path.join(dataDir, 'brain.db'))
+export const OWNER_USER_ID = 'owner'
 
 db.exec(`
   PRAGMA journal_mode = WAL;
@@ -22,8 +23,27 @@ db.exec(`
     value TEXT NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    login TEXT NOT NULL COLLATE NOCASE UNIQUE,
+    name TEXT NOT NULL DEFAULT '',
+    password_hash TEXT NOT NULL DEFAULT '',
+    role TEXT NOT NULL DEFAULT 'user',
+    telegram_id TEXT UNIQUE,
+    telegram_username TEXT,
+    disabled INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    last_login_at TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS telegram_updates (
+    update_id INTEGER PRIMARY KEY,
+    created_at TEXT NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS files (
     id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL DEFAULT 'owner',
     name TEXT NOT NULL,
     mime TEXT NOT NULL,
     size INTEGER NOT NULL,
@@ -44,6 +64,7 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS inbox_items (
     id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL DEFAULT 'owner',
     text TEXT NOT NULL DEFAULT '',
     type TEXT NOT NULL DEFAULT 'text',
     tz TEXT NOT NULL DEFAULT 'UTC',
@@ -56,6 +77,7 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS notes (
     id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL DEFAULT 'owner',
     title TEXT NOT NULL DEFAULT '',
     body TEXT NOT NULL DEFAULT '',
     kind TEXT NOT NULL DEFAULT 'note',
@@ -68,6 +90,7 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS tasks (
     id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL DEFAULT 'owner',
     title TEXT NOT NULL,
     notes TEXT NOT NULL DEFAULT '',
     due_date TEXT,
@@ -82,6 +105,7 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS habits (
     id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL DEFAULT 'owner',
     title TEXT NOT NULL,
     emoji TEXT NOT NULL DEFAULT '✦',
     archived INTEGER NOT NULL DEFAULT 0,
@@ -97,6 +121,7 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS events (
     id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL DEFAULT 'owner',
     title TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
     starts_at TEXT NOT NULL,
@@ -109,13 +134,16 @@ db.exec(`
   );
 
   CREATE TABLE IF NOT EXISTS weekly_summaries (
-    week_start TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL DEFAULT 'owner',
+    week_start TEXT NOT NULL,
     content TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, week_start)
   );
 
   CREATE TABLE IF NOT EXISTS sessions (
     token_hash TEXT PRIMARY KEY,
+    user_id TEXT,
     expires_at INTEGER NOT NULL,
     created_at TEXT NOT NULL
   );
@@ -190,6 +218,47 @@ db.exec(`
     INSERT INTO inbox_fts(rowid, text) VALUES (new.rowid, new.text);
   END;
 `)
+
+function tableColumns(table: string): { name: string }[] {
+  return db.prepare(`PRAGMA table_info(${table})`).all() as unknown as { name: string }[]
+}
+
+function ensureColumn(table: string, column: string, definition: string): void {
+  if (tableColumns(table).some((entry) => entry.name === column)) return
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`)
+}
+
+for (const table of ['files', 'inbox_items', 'notes', 'tasks', 'habits', 'events']) {
+  ensureColumn(table, 'user_id', "TEXT NOT NULL DEFAULT 'owner'")
+}
+ensureColumn('sessions', 'user_id', 'TEXT')
+
+if (!tableColumns('weekly_summaries').some((entry) => entry.name === 'user_id')) {
+  db.exec(`
+    ALTER TABLE weekly_summaries RENAME TO weekly_summaries_legacy;
+    CREATE TABLE weekly_summaries (
+      user_id TEXT NOT NULL DEFAULT 'owner',
+      week_start TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, week_start)
+    );
+    INSERT INTO weekly_summaries (user_id, week_start, content, created_at)
+      SELECT '${OWNER_USER_ID}', week_start, content, created_at FROM weekly_summaries_legacy;
+    DROP TABLE weekly_summaries_legacy;
+  `)
+}
+
+for (const table of ['files', 'inbox_items', 'notes', 'tasks', 'habits', 'events']) {
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_${table}_user ON ${table}(user_id);`)
+}
+db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);')
+
+db.prepare(
+  `INSERT OR IGNORE INTO users (id, login, name, password_hash, role, created_at)
+   VALUES (?, 'owner', 'Владелец', '', 'owner', ?)`,
+).run(OWNER_USER_ID, new Date().toISOString())
+db.prepare('UPDATE sessions SET user_id = ? WHERE user_id IS NULL').run(OWNER_USER_ID)
 
 for (const table of ['notes_fts', 'tasks_fts', 'events_fts', 'inbox_fts']) {
   try {

@@ -167,11 +167,24 @@ export interface AnalyticsSummaryResponse {
   created_at: string
 }
 
+export interface AuthUser {
+  id: string
+  login: string
+  name: string
+  role: 'owner' | 'user'
+  telegram_id: string | null
+  telegram_username: string | null
+  created_at: string
+}
+
 export interface AuthState {
   auth_required: boolean
   authenticated: boolean
   google_enabled: boolean
   password_enabled: boolean
+  telegram_enabled: boolean
+  telegram_bot_username: string | null
+  user: AuthUser | null
 }
 
 export interface AppSettings {

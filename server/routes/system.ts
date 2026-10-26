@@ -17,6 +17,7 @@ import {
 } from '../store'
 import { startOfWeek, todayInTz, validDate } from '../utils'
 import { broadcast } from '../realtime'
+import { requireOwner } from '../auth'
 
 const router = Router()
 
@@ -29,7 +30,7 @@ router.get('/settings/ai', (_req, res) => {
   res.json(getAiSettingsInfo())
 })
 
-router.put('/settings/ai', (req, res) => {
+router.put('/settings/ai', requireOwner, (req, res) => {
   const body = req.body || {}
   const info = saveAiSettings({
     apiKey: typeof body.apiKey === 'string' ? body.apiKey : undefined,

@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { Eye, EyeOff, Loader2, LockKeyhole, Sparkles } from 'lucide-react'
+import { Eye, EyeOff, Loader2, LockKeyhole, Send, Sparkles, UserRound } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import type { AuthState } from '../../shared/types'
 import { api } from '../lib/api'
@@ -44,11 +44,18 @@ function GoogleIcon() {
 }
 
 export function LoginPage({ auth }: { auth: AuthState }) {
+  const [login, setLogin] = useState('')
   const [password, setPassword] = useState('')
   const [visible, setVisible] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(readAuthError)
   const queryClient = useQueryClient()
+
+  const telegramEnabled = Boolean(auth.telegram_enabled)
+  const passwordEnabled = Boolean(auth.password_enabled)
+  const canUsePassword = passwordEnabled || telegramEnabled
+  const botUsername = auth.telegram_bot_username?.replace(/^@/, '') || ''
+  const botLink = botUsername ? `https://t.me/${botUsername}?start=register` : ''
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -56,8 +63,8 @@ export function LoginPage({ auth }: { auth: AuthState }) {
     setLoading(true)
     setError('')
     try {
-      await api.auth.login(password)
-      queryClient.setQueryData(qk.auth, { ...auth, authenticated: true })
+      const result = await api.auth.login(login, password)
+      queryClient.setQueryData(qk.auth, { ...auth, authenticated: true, user: result.user })
       await queryClient.invalidateQueries()
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : 'Не удалось войти.')
@@ -66,11 +73,13 @@ export function LoginPage({ auth }: { auth: AuthState }) {
     }
   }
 
-  const subtitle = auth.google_enabled
-    ? auth.password_enabled
-      ? 'Войди через Google или резервный пароль.'
-      : 'Войди через Google, чтобы открыть свой второй мозг.'
-    : 'Введи пароль, чтобы открыть свой второй мозг.'
+  const subtitle = telegramEnabled
+    ? 'Войди по логину и паролю, которые прислал Telegram-бот.'
+    : auth.google_enabled
+      ? passwordEnabled
+        ? 'Войди через Google или резервный пароль.'
+        : 'Войди через Google, чтобы открыть свой второй мозг.'
+      : 'Введи пароль, чтобы открыть свой второй мозг.'
 
   return (
     <div className="login-shell">
@@ -137,14 +146,55 @@ export function LoginPage({ auth }: { auth: AuthState }) {
               </a>
             )}
 
-            {auth.google_enabled && auth.password_enabled && (
+            {auth.google_enabled && canUsePassword && (
               <div className="login-divider">
                 <span>или по паролю</span>
               </div>
             )}
 
-            {auth.password_enabled && (
+            {telegramEnabled && (
+              <div className="login-telegram">
+                <span className="login-telegram-icon">
+                  <Send size={16} />
+                </span>
+                <span className="login-telegram-copy">
+                  <strong>Ещё нет пароля?</strong>
+                  <span>Напиши боту /start — он создаст кабинет и пришлёт логин с паролем.</span>
+                </span>
+                {botLink && (
+                  <a
+                    className="btn btn-soft btn-small login-telegram-btn"
+                    href={botLink}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Открыть бота
+                  </a>
+                )}
+              </div>
+            )}
+
+            {canUsePassword && (
               <form onSubmit={submit} className="login-form">
+                {telegramEnabled && (
+                  <label className="field">
+                    <span className="field-label">Логин</span>
+                    <span className="input-icon-wrap">
+                      <UserRound size={17} className="input-icon" />
+                      <input
+                        className="input input-with-icon"
+                        type="text"
+                        value={login}
+                        onChange={(event) => setLogin(event.target.value)}
+                        placeholder="Логин из Telegram"
+                        autoComplete="username"
+                        autoCapitalize="none"
+                        spellCheck={false}
+                      />
+                    </span>
+                  </label>
+                )}
+
                 <label className="field">
                   <span className="field-label">Пароль</span>
                   <span className="input-icon-wrap">
@@ -154,9 +204,9 @@ export function LoginPage({ auth }: { auth: AuthState }) {
                       type={visible ? 'text' : 'password'}
                       value={password}
                       onChange={(event) => setPassword(event.target.value)}
-                      placeholder="••••••••"
+                      placeholder={telegramEnabled ? 'Пароль из Telegram' : '••••••••'}
                       autoComplete="current-password"
-                      autoFocus
+                      autoFocus={!telegramEnabled}
                       required
                     />
                     <button
@@ -183,10 +233,22 @@ export function LoginPage({ auth }: { auth: AuthState }) {
           </div>
 
           <p className="login-note">
-            {auth.google_enabled ? (
+            {telegramEnabled ? (
+              <>
+                Логин и пароль выдаёт Telegram-бот
+                {botUsername ? <> @{botUsername}</> : null}. Команда <code>/password</code> в боте
+                выдаст новый пароль.
+                {passwordEnabled && (
+                  <>
+                    {' '}
+                    Владелец также может войти по резервному паролю <code>APP_PASSWORD</code>.
+                  </>
+                )}
+              </>
+            ) : auth.google_enabled ? (
               <>
                 Доступ только для Google-аккаунта владельца кабинета.
-                {auth.password_enabled && (
+                {passwordEnabled && (
                   <>
                     {' '}
                     Резервный пароль задаётся в <code>APP_PASSWORD</code>.

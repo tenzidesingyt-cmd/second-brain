@@ -3,6 +3,7 @@ import type {
   AISettingsInfo,
   AnalyticsSummaryResponse,
   AuthState,
+  AuthUser,
   CalendarEvent,
   Habit,
   InboxItem,
@@ -69,12 +70,13 @@ export interface InboxCreateInput {
 export const api = {
   auth: {
     me: () => request<AuthState>('/api/auth/me'),
-    login: (password: string) =>
-      request<{ ok: boolean }>('/api/auth/login', {
+    login: (login: string, password: string) =>
+      request<{ ok: boolean; user: AuthUser | null }>('/api/auth/login', {
         method: 'POST',
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({ login, password }),
       }),
     logout: () => request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
+    users: () => request<AuthUser[]>('/api/auth/users'),
   },
 
   inbox: {

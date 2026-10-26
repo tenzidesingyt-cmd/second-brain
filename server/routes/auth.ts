@@ -1,5 +1,7 @@
 import { Router, type Request } from 'express'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
+import { OWNER_USER_ID } from '../db'
+import { touchLastLogin } from '../users'
 import {
   SESSION_COOKIE,
   createSession,
@@ -134,7 +136,8 @@ router.get('/google/callback', async (req, res) => {
       return
     }
 
-    res.cookie(SESSION_COOKIE, createSession(), sessionCookieOptions(req))
+    touchLastLogin(OWNER_USER_ID)
+    res.cookie(SESSION_COOKIE, createSession(OWNER_USER_ID), sessionCookieOptions(req))
     res.redirect('/')
   } catch (error) {
     console.error('[auth] google:', error instanceof Error ? error.message : error)

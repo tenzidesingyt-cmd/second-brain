@@ -6,23 +6,29 @@ import os from 'node:os'
 import express from 'express'
 import cookieParser from 'cookie-parser'
 import multer from 'multer'
-import { projectRoot } from './db'
+import { OWNER_USER_ID, projectRoot } from './db'
 import {
   SESSION_COOKIE,
+  attachUserContext,
   checkLoginAllowed,
   clearFailedLogins,
   createSession,
   destroySession,
+  getTelegramBotUsername,
   isAuthRequired,
-  isAuthenticated,
   isGoogleEnabled,
   isPasswordEnabled,
+  isTelegramEnabled,
   registerFailedLogin,
   requireAuth,
+  requireOwner,
   sessionCookieOptions,
   verifyPassword,
 } from './auth'
+import { findUserForLogin, getUserById, listUsers, touchLastLogin, verifyUserPassword } from './users'
 import authRouter from './routes/auth'
+import telegramRouter from './routes/telegram'
+import { initTelegram } from './telegram'
 import { attachRealtime } from './realtime'
 import { resetStuckInbox } from './ai'
 import inboxRouter from './routes/inbox'
@@ -41,6 +47,7 @@ app.disable('x-powered-by')
 app.set('trust proxy', 1)
 app.use(cookieParser())
 app.use(express.json({ limit: '2mb' }))
+app.use(attachUserContext)
 
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, time: new Date().toISOString() })
@@ -49,32 +56,53 @@ app.get('/api/health', (_req, res) => {
 app.get('/api/auth/me', (req, res) => {
   res.json({
     auth_required: isAuthRequired(),
-    authenticated: isAuthenticated(req),
+    authenticated: Boolean(req.user),
     google_enabled: isGoogleEnabled(),
     password_enabled: isPasswordEnabled(),
+    telegram_enabled: isTelegramEnabled(),
+    telegram_bot_username: getTelegramBotUsername(),
+    user: req.user ?? null,
   })
 })
 
 app.post('/api/auth/login', (req, res) => {
-  if (!isPasswordEnabled()) {
-    res.status(400).json({ error: 'Вход по паролю отключён. Используйте вход через Google.' })
-    return
-  }
   const ip = req.ip || req.socket.remoteAddress || 'unknown'
   if (!checkLoginAllowed(ip)) {
     res.status(429).json({ error: 'Слишком много попыток. Подождите 10 минут.' })
     return
   }
+  const login = typeof req.body?.login === 'string' ? req.body.login.trim() : ''
   const password = typeof req.body?.password === 'string' ? req.body.password : ''
-  if (!verifyPassword(password)) {
-    registerFailedLogin(ip)
-    res.status(401).json({ error: 'Неверный пароль.' })
+  if (!password.trim()) {
+    res.status(400).json({ error: 'Введите пароль.' })
     return
   }
-  clearFailedLogins(ip)
-  const token = createSession()
-  res.cookie(SESSION_COOKIE, token, sessionCookieOptions(req))
-  res.json({ ok: true })
+
+  if (isPasswordEnabled() && (!login || login.toLowerCase() === 'owner') && verifyPassword(password)) {
+    clearFailedLogins(ip)
+    touchLastLogin(OWNER_USER_ID)
+    res.cookie(SESSION_COOKIE, createSession(OWNER_USER_ID), sessionCookieOptions(req))
+    res.json({ ok: true, user: getUserById(OWNER_USER_ID) })
+    return
+  }
+
+  if (login) {
+    const user = findUserForLogin(login)
+    if (user && !user.disabled && verifyUserPassword(user.password_hash, password)) {
+      clearFailedLogins(ip)
+      touchLastLogin(user.id)
+      res.cookie(SESSION_COOKIE, createSession(user.id), sessionCookieOptions(req))
+      res.json({ ok: true, user: getUserById(user.id) })
+      return
+    }
+  }
+
+  registerFailedLogin(ip)
+  res.status(401).json({
+    error: isTelegramEnabled()
+      ? 'Неверный логин или пароль. Пароль выдаёт Telegram-бот.'
+      : 'Неверный логин или пароль.',
+  })
 })
 
 app.post('/api/auth/logout', (req, res) => {
@@ -83,6 +111,11 @@ app.post('/api/auth/logout', (req, res) => {
   res.json({ ok: true })
 })
 
+app.get('/api/auth/users', requireAuth, requireOwner, (_req, res) => {
+  res.json(listUsers())
+})
+
+app.use('/api/telegram', telegramRouter)
 app.use('/api/auth', authRouter)
 
 app.use('/api', requireAuth)
@@ -181,11 +214,13 @@ server.listen(port, '0.0.0.0', () => {
     console.log(`  С телефона:  http://${address}:${webPort}`)
   }
   console.log(`  API:         http://localhost:${port}/api`)
-  if (isPasswordEnabled()) console.log('  Вход по паролю включён (APP_PASSWORD).')
+  if (isPasswordEnabled()) console.log('  Вход по паролю владельца включён (APP_PASSWORD).')
   if (isGoogleEnabled()) {
     console.log('  Вход через Google включён.')
   } else if (isAuthRequired()) {
     console.log('  Google-вход не настроен: задайте GOOGLE_CLIENT_ID и GOOGLE_CLIENT_SECRET.')
   }
+  if (isTelegramEnabled()) console.log('  Вход через Telegram-бота включён.')
   console.log('')
+  void initTelegram()
 })

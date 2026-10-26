@@ -4164,6 +4164,11 @@
   color: var(--green);
 }
 
+.settings-state.is-error {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
 .settings-card .inline-note {
   margin-top: 12px;
   font-size: 9.5px;
@@ -4234,6 +4239,130 @@
   border-color: transparent;
   background: var(--danger-soft);
   color: var(--danger);
+}
+
+.settings-account {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-2) 30%, var(--surface));
+}
+
+.settings-account-avatar,
+.settings-user-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 31px;
+  height: 31px;
+  border-radius: 9px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.settings-account-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-account-copy strong {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+.settings-account-copy em,
+.settings-user-copy em {
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 8px;
+  font-style: normal;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.settings-account-copy span {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.settings-bot-btn {
+  margin-bottom: 12px;
+}
+
+.settings-user-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settings-user-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-2) 30%, var(--surface));
+}
+
+.settings-user-copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-user-copy strong {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.settings-user-copy span {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 8.5px;
+  line-height: 1.45;
+}
+
+.settings-user-row .badge {
+  flex: none;
+  font-size: 8px;
+}
+
+.ai-readonly {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.ai-readonly .settings-footnote {
+  margin: 0;
 }
 
 .settings-about-list {

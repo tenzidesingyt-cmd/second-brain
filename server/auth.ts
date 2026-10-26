@@ -1,9 +1,19 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import type { NextFunction, Request, Response } from 'express'
-import { db } from './db'
+import { OWNER_USER_ID, db } from './db'
+import { getUserById, type PublicUser } from './users'
+import { runAsUser } from './userContext'
 
 export const SESSION_COOKIE = 'brain_session'
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000
+
+declare global {
+  namespace Express {
+    interface Request {
+      user?: PublicUser
+    }
+  }
+}
 
 function hashToken(token: string): string {
   return createHash('sha256').update(token, 'utf8').digest('hex')
@@ -23,8 +33,12 @@ export function isGoogleEnabled(): boolean {
   )
 }
 
+export function isTelegramEnabled(): boolean {
+  return Boolean((process.env.TELEGRAM_BOT_TOKEN || '').trim())
+}
+
 export function isAuthRequired(): boolean {
-  return isPasswordEnabled() || isGoogleEnabled()
+  return isPasswordEnabled() || isGoogleEnabled() || isTelegramEnabled()
 }
 
 export function getGoogleConfig() {
@@ -40,50 +54,97 @@ export function isOwnerEmail(email: string): boolean {
   return Boolean(owner) && email.trim().toLowerCase() === owner
 }
 
-export function createSession(): string {
+export function getTelegramBotUsername(): string | null {
+  const configured = (process.env.TELEGRAM_BOT_USERNAME || '').trim().replace(/^@/, '')
+  if (configured) return configured
+  const found = db.prepare(`SELECT value FROM settings WHERE key = 'telegram_bot_username'`).get() as
+    | { value: string }
+    | undefined
+  return found?.value?.replace(/^@/, '') || null
+}
+
+interface SessionUserRow {
+  user_id: string
+  expires_at: number
+  role: string
+  disabled: number
+}
+
+export function createSession(userId: string): string {
   const token = randomBytes(32).toString('hex')
   db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now())
-  db.prepare('INSERT INTO sessions (token_hash, expires_at, created_at) VALUES (?, ?, ?)').run(
+  db.prepare('INSERT INTO sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)').run(
     hashToken(token),
+    userId,
     Date.now() + SESSION_TTL_MS,
     new Date().toISOString(),
   )
   return token
 }
 
-export function isSessionValid(token: string | undefined | null): boolean {
-  if (!token) return false
+export function getSessionUser(token: string | undefined | null): PublicUser | null {
+  if (!token) return null
   const tokenHash = hashToken(token)
-  const found = db.prepare('SELECT expires_at FROM sessions WHERE token_hash = ?').get(tokenHash) as
-    | { expires_at: number }
-    | undefined
-  if (!found) return false
-  if (Number(found.expires_at) < Date.now()) {
+  const found = db
+    .prepare(
+      `SELECT s.user_id, s.expires_at, u.role, u.disabled
+       FROM sessions s JOIN users u ON u.id = s.user_id
+       WHERE s.token_hash = ?`,
+    )
+    .get(tokenHash) as SessionUserRow | undefined
+  if (!found) return null
+  if (Number(found.expires_at) < Date.now() || Number(found.disabled) === 1) {
     db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(tokenHash)
-    return false
+    return null
   }
-  return true
+  return getUserById(found.user_id)
+}
+
+export function isSessionValid(token: string | undefined | null): boolean {
+  return Boolean(getSessionUser(token))
 }
 
 export function destroySession(token: string | undefined | null): void {
   if (token) db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(hashToken(token))
 }
 
-export function isAuthenticated(req: Request): boolean {
-  if (!isAuthRequired()) return true
-  return isSessionValid(req.cookies?.[SESSION_COOKIE])
+export function sessionUserFromCookieHeader(cookieHeader: string | undefined): PublicUser | null {
+  if (!isAuthRequired()) return getUserById(OWNER_USER_ID)
+  if (!cookieHeader) return null
+  const match = cookieHeader.match(new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([^;]+)`))
+  return getSessionUser(match?.[1])
 }
 
-export function isAuthorizedCookieHeader(cookieHeader: string | undefined): boolean {
+export function isAuthenticated(req: Request): boolean {
   if (!isAuthRequired()) return true
-  if (!cookieHeader) return false
-  const match = cookieHeader.match(new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([^;]+)`))
-  return isSessionValid(match?.[1])
+  return Boolean(req.user)
+}
+
+export function attachUserContext(req: Request, res: Response, next: NextFunction): void {
+  const user = sessionUserFromCookieHeader(req.headers.cookie)
+  if (!user) {
+    next()
+    return
+  }
+  req.user = user
+  runAsUser(user.id, next)
 }
 
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
-  if (!isAuthenticated(req)) {
+  if (!isAuthRequired()) {
+    next()
+    return
+  }
+  if (!req.user) {
     res.status(401).json({ error: 'Требуется вход в приложение.' })
+    return
+  }
+  next()
+}
+
+export function requireOwner(req: Request, res: Response, next: NextFunction): void {
+  if (req.user?.role !== 'owner') {
+    res.status(403).json({ error: 'Это действие доступно только владельцу кабинета.' })
     return
   }
   next()

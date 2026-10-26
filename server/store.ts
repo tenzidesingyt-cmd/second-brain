@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { db, uploadsDir } from './db'
+import { currentUserId } from './userContext'
 import { addDays, localDayOf, nowIso, safeJson, startOfWeek, todayInTz, uid } from './utils'
 import type {
   AIResult,
@@ -113,10 +114,10 @@ function attachmentsFor(entityType: string, ids: string[]): Map<string, MediaFil
       .prepare(
         `SELECT a.entity_id, f.id, f.name, f.mime, f.size, f.stored_name, f.created_at
          FROM attachments a JOIN files f ON f.id = a.file_id
-         WHERE a.entity_type = ? AND a.entity_id IN (${placeholders})
+         WHERE a.entity_type = ? AND a.entity_id IN (${placeholders}) AND f.user_id = ?
          ORDER BY a.created_at ASC`,
       )
-      .all(entityType, ...ids),
+      .all(entityType, ...ids, currentUserId()),
   )
   for (const file of found) {
     result.get(file.entity_id)?.push(mediaFromFile(file))
@@ -133,8 +134,8 @@ export function registerFile(input: {
   const id = uid()
   const created_at = nowIso()
   db.prepare(
-    `INSERT INTO files (id, name, mime, size, stored_name, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(id, input.name, input.mime, input.size, input.stored_name, created_at)
+    `INSERT INTO files (id, user_id, name, mime, size, stored_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(id, currentUserId(), input.name, input.mime, input.size, input.stored_name, created_at)
   return {
     id,
     name: input.name,
@@ -148,16 +149,19 @@ export function registerFile(input: {
 export function attachFiles(entityType: string, entityId: string, fileIds: string[]): void {
   const statement = db.prepare(
     `INSERT OR IGNORE INTO attachments (id, file_id, entity_type, entity_id, created_at)
-     VALUES (?, ?, ?, ?, ?)`,
+     SELECT ?, id, ?, ?, ? FROM files WHERE id = ? AND user_id = ?`,
   )
   const createdAt = nowIso()
+  const userId = currentUserId()
   for (const fileId of fileIds) {
-    statement.run(uid(), fileId, entityType, entityId, createdAt)
+    statement.run(uid(), entityType, entityId, createdAt, fileId, userId)
   }
 }
 
 export function getPhysicalFile(fileId: string): { file: MediaFile; absPath: string } | null {
-  const found = row<FileRow>(db.prepare(`SELECT * FROM files WHERE id = ?`).get(fileId))
+  const found = row<FileRow>(
+    db.prepare(`SELECT * FROM files WHERE id = ? AND user_id = ?`).get(fileId, currentUserId()),
+  )
   if (!found) return null
   return {
     file: mediaFromFile(found),
@@ -170,21 +174,26 @@ function cleanupFileIfOrphan(fileId: string): void {
     db.prepare(`SELECT COUNT(*) as count FROM attachments WHERE file_id = ?`).get(fileId),
   )
   if (used && used.count > 0) return
-  const file = row<FileRow>(db.prepare(`SELECT * FROM files WHERE id = ?`).get(fileId))
+  const file = row<FileRow>(
+    db.prepare(`SELECT * FROM files WHERE id = ? AND user_id = ?`).get(fileId, currentUserId()),
+  )
   if (!file) return
   try {
     fs.rmSync(path.join(uploadsDir, file.stored_name), { force: true })
   } catch {
     // The DB row is removed even if the file is locked on disk.
   }
-  db.prepare(`DELETE FROM files WHERE id = ?`).run(fileId)
+  db.prepare(`DELETE FROM files WHERE id = ? AND user_id = ?`).run(fileId, currentUserId())
 }
 
 export function detachFile(entityType: string, entityId: string, fileId: string): void {
   const existing = row<{ file_id: string }>(
     db
-      .prepare(`SELECT file_id FROM attachments WHERE entity_type = ? AND entity_id = ? AND file_id = ?`)
-      .get(entityType, entityId, fileId),
+      .prepare(
+        `SELECT a.file_id FROM attachments a JOIN files f ON f.id = a.file_id
+         WHERE a.entity_type = ? AND a.entity_id = ? AND a.file_id = ? AND f.user_id = ?`,
+      )
+      .get(entityType, entityId, fileId, currentUserId()),
   )
   if (!existing) return
   db.prepare(`DELETE FROM attachments WHERE entity_type = ? AND entity_id = ? AND file_id = ?`).run(
@@ -198,8 +207,11 @@ export function detachFile(entityType: string, entityId: string, fileId: string)
 function detachAll(entityType: string, entityId: string): void {
   const linked = rows<{ file_id: string }>(
     db
-      .prepare(`SELECT file_id FROM attachments WHERE entity_type = ? AND entity_id = ?`)
-      .all(entityType, entityId),
+      .prepare(
+        `SELECT a.file_id FROM attachments a JOIN files f ON f.id = a.file_id
+         WHERE a.entity_type = ? AND a.entity_id = ? AND f.user_id = ?`,
+      )
+      .all(entityType, entityId, currentUserId()),
   )
   db.prepare(`DELETE FROM attachments WHERE entity_type = ? AND entity_id = ?`).run(entityType, entityId)
   for (const file of linked) cleanupFileIfOrphan(file.file_id)
@@ -224,16 +236,27 @@ function mapInboxItems(items: InboxRow[]): InboxItem[] {
 }
 
 export function listInbox(status?: string): InboxItem[] {
+  const userId = currentUserId()
   const items = status
     ? rows<InboxRow>(
-        db.prepare(`SELECT * FROM inbox_items WHERE status = ? ORDER BY created_at DESC LIMIT 300`).all(status),
+        db
+          .prepare(
+            `SELECT * FROM inbox_items WHERE user_id = ? AND status = ? ORDER BY created_at DESC LIMIT 300`,
+          )
+          .all(userId, status),
       )
-    : rows<InboxRow>(db.prepare(`SELECT * FROM inbox_items ORDER BY created_at DESC LIMIT 300`).all())
+    : rows<InboxRow>(
+        db
+          .prepare(`SELECT * FROM inbox_items WHERE user_id = ? ORDER BY created_at DESC LIMIT 300`)
+          .all(userId),
+      )
   return mapInboxItems(items)
 }
 
 export function getInboxItem(id: string): InboxItem | null {
-  const item = row<InboxRow>(db.prepare(`SELECT * FROM inbox_items WHERE id = ?`).get(id))
+  const item = row<InboxRow>(
+    db.prepare(`SELECT * FROM inbox_items WHERE id = ? AND user_id = ?`).get(id, currentUserId()),
+  )
   return item ? mapInboxItems([item])[0] : null
 }
 
@@ -246,10 +269,11 @@ export function createInboxItem(input: {
 }): InboxItem {
   const id = uid()
   db.prepare(
-    `INSERT INTO inbox_items (id, text, type, tz, status, ai_error, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO inbox_items (id, user_id, text, type, tz, status, ai_error, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
+    currentUserId(),
     input.text,
     input.type,
     input.tz || 'UTC',
@@ -298,14 +322,14 @@ export function updateInboxItem(
     values.push(patch.processed_at)
   }
   if (!fields.length) return getInboxItem(id)
-  values.push(id)
-  db.prepare(`UPDATE inbox_items SET ${fields.join(', ')} WHERE id = ?`).run(...values)
+  values.push(id, currentUserId())
+  db.prepare(`UPDATE inbox_items SET ${fields.join(', ')} WHERE id = ? AND user_id = ?`).run(...values)
   return getInboxItem(id)
 }
 
 export function deleteInboxItem(id: string): void {
   detachAll('inbox', id)
-  db.prepare(`DELETE FROM inbox_items WHERE id = ?`).run(id)
+  db.prepare(`DELETE FROM inbox_items WHERE id = ? AND user_id = ?`).run(id, currentUserId())
 }
 
 // ── Notes ────────────────────────────────────────────────────────────────
@@ -328,6 +352,7 @@ function mapNotes(noteRows: NoteRow[]): Note[] {
 
 export function listNotes(input: { kind?: NoteKind; q?: string } = {}): Note[] {
   let noteRows: NoteRow[]
+  const userId = currentUserId()
   const query = input.q?.trim()
   if (query) {
     const match = buildFtsMatch(query)
@@ -336,24 +361,30 @@ export function listNotes(input: { kind?: NoteKind; q?: string } = {}): Note[] {
       noteRows = rows<NoteRow>(
         db
           .prepare(
-            `SELECT * FROM notes WHERE rowid IN (
+            `SELECT * FROM notes WHERE user_id = ? AND rowid IN (
                SELECT rowid FROM notes_fts WHERE notes_fts MATCH ? ORDER BY rank LIMIT 100
              ) ORDER BY updated_at DESC`,
           )
-          .all(match),
+          .all(userId, match),
       )
     } catch {
       return []
     }
   } else {
-    noteRows = rows<NoteRow>(db.prepare(`SELECT * FROM notes ORDER BY pinned DESC, updated_at DESC`).all())
+    noteRows = rows<NoteRow>(
+      db
+        .prepare(`SELECT * FROM notes WHERE user_id = ? ORDER BY pinned DESC, updated_at DESC`)
+        .all(userId),
+    )
   }
   if (input.kind) noteRows = noteRows.filter((note) => note.kind === input.kind)
   return mapNotes(noteRows)
 }
 
 export function getNote(id: string): Note | null {
-  const note = row<NoteRow>(db.prepare(`SELECT * FROM notes WHERE id = ?`).get(id))
+  const note = row<NoteRow>(
+    db.prepare(`SELECT * FROM notes WHERE id = ? AND user_id = ?`).get(id, currentUserId()),
+  )
   return note ? mapNotes([note])[0] : null
 }
 
@@ -369,10 +400,11 @@ export function createNote(input: {
   const id = uid()
   const timestamp = nowIso()
   db.prepare(
-    `INSERT INTO notes (id, title, body, kind, tags, pinned, source_inbox_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO notes (id, user_id, title, body, kind, tags, pinned, source_inbox_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
+    currentUserId(),
     input.title?.trim() || '',
     input.body || '',
     input.kind || 'note',
@@ -421,14 +453,14 @@ export function updateNote(
   if (!fields.length) return getNote(id)
   fields.push('updated_at = ?')
   values.push(nowIso())
-  values.push(id)
-  db.prepare(`UPDATE notes SET ${fields.join(', ')} WHERE id = ?`).run(...values)
+  values.push(id, currentUserId())
+  db.prepare(`UPDATE notes SET ${fields.join(', ')} WHERE id = ? AND user_id = ?`).run(...values)
   return getNote(id)
 }
 
 export function deleteNote(id: string): void {
   detachAll('note', id)
-  db.prepare(`DELETE FROM notes WHERE id = ?`).run(id)
+  db.prepare(`DELETE FROM notes WHERE id = ? AND user_id = ?`).run(id, currentUserId())
 }
 
 // ── Tasks ────────────────────────────────────────────────────────────────
@@ -456,15 +488,17 @@ export function listTasks(): Task[] {
     rows<TaskRow>(
       db
         .prepare(
-          `SELECT * FROM tasks ORDER BY completed ASC, due_date IS NULL, due_date ASC, due_time IS NULL, due_time ASC, created_at DESC`,
+          `SELECT * FROM tasks WHERE user_id = ? ORDER BY completed ASC, due_date IS NULL, due_date ASC, due_time IS NULL, due_time ASC, created_at DESC`,
         )
-        .all(),
+        .all(currentUserId()),
     ),
   )
 }
 
 export function getTask(id: string): Task | null {
-  const task = row<TaskRow>(db.prepare(`SELECT * FROM tasks WHERE id = ?`).get(id))
+  const task = row<TaskRow>(
+    db.prepare(`SELECT * FROM tasks WHERE id = ? AND user_id = ?`).get(id, currentUserId()),
+  )
   return task ? mapTasks([task])[0] : null
 }
 
@@ -481,10 +515,11 @@ export function createTask(input: {
   const id = uid()
   const timestamp = nowIso()
   db.prepare(
-    `INSERT INTO tasks (id, title, notes, due_date, due_time, priority, completed, completed_at, source_inbox_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO tasks (id, user_id, title, notes, due_date, due_time, priority, completed, completed_at, source_inbox_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
+    currentUserId(),
     input.title.trim(),
     input.notes || '',
     input.due_date || null,
@@ -544,14 +579,14 @@ export function updateTask(
   if (!fields.length) return current
   fields.push('updated_at = ?')
   values.push(nowIso())
-  values.push(id)
-  db.prepare(`UPDATE tasks SET ${fields.join(', ')} WHERE id = ?`).run(...values)
+  values.push(id, currentUserId())
+  db.prepare(`UPDATE tasks SET ${fields.join(', ')} WHERE id = ? AND user_id = ?`).run(...values)
   return getTask(id)
 }
 
 export function deleteTask(id: string): void {
   detachAll('task', id)
-  db.prepare(`DELETE FROM tasks WHERE id = ?`).run(id)
+  db.prepare(`DELETE FROM tasks WHERE id = ? AND user_id = ?`).run(id, currentUserId())
 }
 
 // ── Habits ───────────────────────────────────────────────────────────────
@@ -574,19 +609,24 @@ function mapHabit(habit: HabitRow): Habit {
 
 export function listHabits(): Habit[] {
   return rows<HabitRow>(
-    db.prepare(`SELECT * FROM habits WHERE archived = 0 ORDER BY created_at ASC`).all(),
+    db
+      .prepare(`SELECT * FROM habits WHERE user_id = ? AND archived = 0 ORDER BY created_at ASC`)
+      .all(currentUserId()),
   ).map(mapHabit)
 }
 
 export function getHabit(id: string): Habit | null {
-  const habit = row<HabitRow>(db.prepare(`SELECT * FROM habits WHERE id = ?`).get(id))
+  const habit = row<HabitRow>(
+    db.prepare(`SELECT * FROM habits WHERE id = ? AND user_id = ?`).get(id, currentUserId()),
+  )
   return habit ? mapHabit(habit) : null
 }
 
 export function createHabit(input: { title: string; emoji?: string }): Habit {
   const id = uid()
-  db.prepare(`INSERT INTO habits (id, title, emoji, created_at) VALUES (?, ?, ?, ?)`).run(
+  db.prepare(`INSERT INTO habits (id, user_id, title, emoji, created_at) VALUES (?, ?, ?, ?, ?)`).run(
     id,
+    currentUserId(),
     input.title.trim(),
     input.emoji || '✦',
     nowIso(),
@@ -595,20 +635,22 @@ export function createHabit(input: { title: string; emoji?: string }): Habit {
 }
 
 export function updateHabit(id: string, patch: { title?: string; emoji?: string }): Habit | null {
+  const userId = currentUserId()
   if (patch.title !== undefined) {
-    db.prepare(`UPDATE habits SET title = ? WHERE id = ?`).run(patch.title, id)
+    db.prepare(`UPDATE habits SET title = ? WHERE id = ? AND user_id = ?`).run(patch.title, id, userId)
   }
   if (patch.emoji !== undefined) {
-    db.prepare(`UPDATE habits SET emoji = ? WHERE id = ?`).run(patch.emoji, id)
+    db.prepare(`UPDATE habits SET emoji = ? WHERE id = ? AND user_id = ?`).run(patch.emoji, id, userId)
   }
   return getHabit(id)
 }
 
 export function deleteHabit(id: string): void {
-  db.prepare(`DELETE FROM habits WHERE id = ?`).run(id)
+  db.prepare(`DELETE FROM habits WHERE id = ? AND user_id = ?`).run(id, currentUserId())
 }
 
 export function toggleHabit(id: string, date: string, done: boolean): Habit | null {
+  if (!getHabit(id)) return null
   if (done) {
     db.prepare(`INSERT OR IGNORE INTO habit_logs (habit_id, date, created_at) VALUES (?, ?, ?)`).run(
       id,
@@ -641,11 +683,17 @@ function mapEvents(eventRows: EventRow[]): CalendarEvent[] {
 }
 
 export function listEvents(): CalendarEvent[] {
-  return mapEvents(rows<EventRow>(db.prepare(`SELECT * FROM events ORDER BY starts_at ASC`).all()))
+  return mapEvents(
+    rows<EventRow>(
+      db.prepare(`SELECT * FROM events WHERE user_id = ? ORDER BY starts_at ASC`).all(currentUserId()),
+    ),
+  )
 }
 
 export function getEvent(id: string): CalendarEvent | null {
-  const event = row<EventRow>(db.prepare(`SELECT * FROM events WHERE id = ?`).get(id))
+  const event = row<EventRow>(
+    db.prepare(`SELECT * FROM events WHERE id = ? AND user_id = ?`).get(id, currentUserId()),
+  )
   return event ? mapEvents([event])[0] : null
 }
 
@@ -662,10 +710,11 @@ export function createEvent(input: {
   const id = uid()
   const timestamp = nowIso()
   db.prepare(
-    `INSERT INTO events (id, title, description, starts_at, ends_at, all_day, location, source_inbox_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO events (id, user_id, title, description, starts_at, ends_at, all_day, location, source_inbox_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
+    currentUserId(),
     input.title.trim(),
     input.description || '',
     input.starts_at,
@@ -720,14 +769,14 @@ export function updateEvent(
   if (!fields.length) return getEvent(id)
   fields.push('updated_at = ?')
   values.push(nowIso())
-  values.push(id)
-  db.prepare(`UPDATE events SET ${fields.join(', ')} WHERE id = ?`).run(...values)
+  values.push(id, currentUserId())
+  db.prepare(`UPDATE events SET ${fields.join(', ')} WHERE id = ? AND user_id = ?`).run(...values)
   return getEvent(id)
 }
 
 export function deleteEvent(id: string): void {
   detachAll('event', id)
-  db.prepare(`DELETE FROM events WHERE id = ?`).run(id)
+  db.prepare(`DELETE FROM events WHERE id = ? AND user_id = ?`).run(id, currentUserId())
 }
 
 // ── Settings & summaries ─────────────────────────────────────────────────
@@ -750,16 +799,18 @@ export function deleteSetting(key: string): void {
 
 export function getWeeklySummary(weekStart: string): { content: string; created_at: string } | null {
   const found = row<{ content: string; created_at: string }>(
-    db.prepare(`SELECT content, created_at FROM weekly_summaries WHERE week_start = ?`).get(weekStart),
+    db
+      .prepare(`SELECT content, created_at FROM weekly_summaries WHERE user_id = ? AND week_start = ?`)
+      .get(currentUserId(), weekStart),
   )
   return found || null
 }
 
 export function saveWeeklySummary(weekStart: string, content: string): void {
   db.prepare(
-    `INSERT INTO weekly_summaries (week_start, content, created_at) VALUES (?, ?, ?)
-     ON CONFLICT(week_start) DO UPDATE SET content = excluded.content, created_at = excluded.created_at`,
-  ).run(weekStart, content, nowIso())
+    `INSERT INTO weekly_summaries (user_id, week_start, content, created_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(user_id, week_start) DO UPDATE SET content = excluded.content, created_at = excluded.created_at`,
+  ).run(currentUserId(), weekStart, content, nowIso())
 }
 
 // ── Search ───────────────────────────────────────────────────────────────
@@ -784,16 +835,17 @@ export function searchAll(query: string): SearchResponse {
   let notes: Note[] = []
   let tasks: Task[] = []
   let inbox: InboxItem[] = []
+  const userId = currentUserId()
   try {
     notes = mapNotes(
       rows<NoteRow>(
         db
           .prepare(
-            `SELECT * FROM notes WHERE rowid IN (
+            `SELECT * FROM notes WHERE user_id = ? AND rowid IN (
                SELECT rowid FROM notes_fts WHERE notes_fts MATCH ? ORDER BY rank LIMIT 30
              ) ORDER BY updated_at DESC`,
           )
-          .all(match),
+          .all(userId, match),
       ),
     )
   } catch {
@@ -804,11 +856,11 @@ export function searchAll(query: string): SearchResponse {
       rows<TaskRow>(
         db
           .prepare(
-            `SELECT * FROM tasks WHERE rowid IN (
+            `SELECT * FROM tasks WHERE user_id = ? AND rowid IN (
                SELECT rowid FROM tasks_fts WHERE tasks_fts MATCH ? ORDER BY rank LIMIT 30
              )`,
           )
-          .all(match),
+          .all(userId, match),
       ),
     )
   } catch {
@@ -819,11 +871,11 @@ export function searchAll(query: string): SearchResponse {
       rows<InboxRow>(
         db
           .prepare(
-            `SELECT * FROM inbox_items WHERE rowid IN (
+            `SELECT * FROM inbox_items WHERE user_id = ? AND rowid IN (
                SELECT rowid FROM inbox_fts WHERE inbox_fts MATCH ? ORDER BY rank LIMIT 15
              ) ORDER BY created_at DESC`,
           )
-          .all(match),
+          .all(userId, match),
       ),
     )
   } catch {
@@ -849,10 +901,13 @@ export function getWeekAnalytics(weekStartInput: string, tz: string): WeekAnalyt
   const weekStart = startOfWeek(weekStartInput)
   const weekEnd = addDays(weekStart, 6)
   const today = todayInTz(tz)
-  const allTasks = rows<TaskRow>(db.prepare(`SELECT * FROM tasks`).all())
-  const allNotes = rows<{ created_at: string }>(db.prepare(`SELECT created_at FROM notes`).all())
+  const userId = currentUserId()
+  const allTasks = rows<TaskRow>(db.prepare(`SELECT * FROM tasks WHERE user_id = ?`).all(userId))
+  const allNotes = rows<{ created_at: string }>(
+    db.prepare(`SELECT created_at FROM notes WHERE user_id = ?`).all(userId),
+  )
   const allInbox = rows<{ created_at: string; status: string; processed_at: string | null }>(
-    db.prepare(`SELECT created_at, status, processed_at FROM inbox_items`).all(),
+    db.prepare(`SELECT created_at, status, processed_at FROM inbox_items WHERE user_id = ?`).all(userId),
   )
   const days = Array.from({ length: 7 }, (_, index) => addDays(weekStart, index))
   const inWeek = (day: string | null) => Boolean(day && day >= weekStart && day <= weekEnd)
@@ -901,7 +956,9 @@ export function getWeekAnalytics(weekStartInput: string, tz: string): WeekAnalyt
 export function getNotesForAiSearch(): Note[] {
   return mapNotes(
     rows<NoteRow>(
-      db.prepare(`SELECT * FROM notes ORDER BY updated_at DESC LIMIT 80`).all(),
+      db
+        .prepare(`SELECT * FROM notes WHERE user_id = ? ORDER BY updated_at DESC LIMIT 80`)
+        .all(currentUserId()),
     ),
   )
 }
@@ -911,7 +968,11 @@ export function buildAiSearchResponse(answer: string, noteIds: string[]): AISear
   if (!uniqueIds.length) return { answer, notes: [] }
   const placeholders = uniqueIds.map(() => '?').join(',')
   const found = mapNotes(
-    rows<NoteRow>(db.prepare(`SELECT * FROM notes WHERE id IN (${placeholders})`).all(...uniqueIds)),
+    rows<NoteRow>(
+      db
+        .prepare(`SELECT * FROM notes WHERE user_id = ? AND id IN (${placeholders})`)
+        .all(currentUserId(), ...uniqueIds),
+    ),
   )
   const byId = new Map(found.map((note) => [note.id, note]))
   return {
@@ -922,7 +983,9 @@ export function buildAiSearchResponse(answer: string, noteIds: string[]): AISear
 
 export function getAllInboxTz(): string {
   const found = row<{ tz: string }>(
-    db.prepare(`SELECT tz FROM inbox_items ORDER BY created_at DESC LIMIT 1`).get(),
+    db
+      .prepare(`SELECT tz FROM inbox_items WHERE user_id = ? ORDER BY created_at DESC LIMIT 1`)
+      .get(currentUserId()),
   )
   return found?.tz || 'UTC'
 }

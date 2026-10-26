@@ -1,6 +1,9 @@
 import type { Server as HttpServer } from 'node:http'
 import { WebSocket, WebSocketServer } from 'ws'
-import { isAuthorizedCookieHeader } from './auth'
+import { sessionUserFromCookieHeader } from './auth'
+import { tryCurrentUserId } from './userContext'
+
+type AuthedSocket = WebSocket & { isAlive?: boolean; userId?: string }
 
 let wss: WebSocketServer | null = null
 
@@ -13,18 +16,20 @@ export function attachRealtime(server: HttpServer): void {
       socket.destroy()
       return
     }
-    if (!isAuthorizedCookieHeader(request.headers.cookie)) {
+    const user = sessionUserFromCookieHeader(request.headers.cookie)
+    if (!user) {
       socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
       socket.destroy()
       return
     }
     wss?.handleUpgrade(request, socket, head, (client) => {
+      ;(client as AuthedSocket).userId = user.id
       wss?.emit('connection', client, request)
     })
   })
 
   wss.on('connection', (client) => {
-    const socket = client as WebSocket & { isAlive?: boolean }
+    const socket = client as AuthedSocket
     socket.isAlive = true
     socket.on('pong', () => {
       socket.isAlive = true
@@ -37,7 +42,7 @@ export function attachRealtime(server: HttpServer): void {
 
   const heartbeat = setInterval(() => {
     for (const client of wss?.clients || []) {
-      const socket = client as WebSocket & { isAlive?: boolean }
+      const socket = client as AuthedSocket
       if (socket.isAlive === false) {
         socket.terminate()
         continue
@@ -51,6 +56,19 @@ export function attachRealtime(server: HttpServer): void {
 }
 
 export function broadcast(type: string, payload: Record<string, unknown> = {}): void {
+  if (!wss) return
+  const userId = tryCurrentUserId()
+  if (!userId) return
+  const message = JSON.stringify({ type, payload, at: new Date().toISOString() })
+  for (const client of wss.clients) {
+    const socket = client as AuthedSocket
+    if (socket.userId === userId && socket.readyState === WebSocket.OPEN) {
+      socket.send(message)
+    }
+  }
+}
+
+export function broadcastAll(type: string, payload: Record<string, unknown> = {}): void {
   if (!wss) return
   const message = JSON.stringify({ type, payload, at: new Date().toISOString() })
   for (const client of wss.clients) {

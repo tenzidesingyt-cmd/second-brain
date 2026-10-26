@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { broadcast } from './realtime'
+import { broadcast, broadcastAll } from './realtime'
 import {
   buildAiSearchResponse,
   createEvent,
@@ -13,14 +13,14 @@ import {
   getSetting,
   getWeekAnalytics,
   listHabits,
-  listInbox,
   listNotes,
   listTasks,
   saveWeeklySummary,
   setSetting,
   updateInboxItem,
 } from './store'
-import { transaction } from './db'
+import { db, transaction } from './db'
+import { runAsUser, tryCurrentUserId } from './userContext'
 import {
   localDayOf,
   normalizeDateTime,
@@ -100,7 +100,7 @@ export function saveAiSettings(input: {
   saveModel('model_text', input.textModel)
   saveModel('model_vision', input.visionModel)
   saveModel('model_stt', input.sttModel)
-  broadcast('ai:settings-changed')
+  broadcastAll('ai:settings-changed')
   return getAiSettingsInfo()
 }
 
@@ -469,7 +469,13 @@ function processingPrompt(today: string, time: string, weekday: string, tz: stri
 Поля note/tasks/event всегда присутствуют: используй null для note/event и [] для tasks, если они не нужны. Предметы и факты не добавляй от себя.`
 }
 
-export async function processInboxItem(itemId: string): Promise<void> {
+export async function processInboxItem(itemId: string, userId?: string): Promise<void> {
+  const resolved = userId || tryCurrentUserId()
+  if (!resolved) throw new Error('Не удалось определить пользователя для обработки материала.')
+  await runAsUser(resolved, () => processInboxItemForUser(itemId))
+}
+
+async function processInboxItemForUser(itemId: string): Promise<void> {
   const item = getInboxItem(itemId)
   if (!item) return
   const config = getAiConfig()
@@ -597,27 +603,34 @@ export async function processInboxItem(itemId: string): Promise<void> {
   }
 }
 
-const queue: string[] = []
+const queue: { itemId: string; userId: string }[] = []
 const active = new Set<string>()
 let running = 0
 const MAX_CONCURRENT = 2
 
 export function enqueueInbox(itemId: string): void {
-  if (!queue.includes(itemId) && !active.has(itemId)) queue.push(itemId)
+  const userId = tryCurrentUserId()
+  if (!userId) {
+    console.error('[ai] enqueue without user context')
+    return
+  }
+  if (!queue.some((entry) => entry.itemId === itemId) && !active.has(itemId)) {
+    queue.push({ itemId, userId })
+  }
   pumpQueue()
 }
 
 function pumpQueue(): void {
   while (running < MAX_CONCURRENT && queue.length) {
-    const id = queue.shift()!
-    active.add(id)
+    const entry = queue.shift()!
+    active.add(entry.itemId)
     running += 1
-    processInboxItem(id)
+    processInboxItem(entry.itemId, entry.userId)
       .catch((error) => {
         console.error('[ai] queue error:', error)
       })
       .finally(() => {
-        active.delete(id)
+        active.delete(entry.itemId)
         running -= 1
         pumpQueue()
       })
@@ -625,12 +638,11 @@ function pumpQueue(): void {
 }
 
 export function resetStuckInbox(): void {
-  for (const item of listInbox('processing')) {
-    updateInboxItem(item.id, {
-      status: 'failed',
-      ai_error: 'Обработка была прервана перезапуском сервера. Нажмите «Обработать снова».',
-    })
-  }
+  db.prepare(
+    `UPDATE inbox_items
+     SET status = 'failed', ai_error = ?
+     WHERE status = 'processing'`,
+  ).run('Обработка была прервана перезапуском сервера. Нажмите «Обработать снова».')
 }
 
 export async function runAiSearch(query: string): Promise<AISearchResponse> {

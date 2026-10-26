@@ -3,6 +3,7 @@ import { api, type NotesQuery } from './api'
 
 export const qk = {
   auth: ['auth'] as const,
+  authUsers: ['auth', 'users'] as const,
   inbox: ['inbox'] as const,
   notes: ['notes'] as const,
   note: (id: string) => ['notes', 'detail', id] as const,

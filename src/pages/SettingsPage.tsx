@@ -14,11 +14,13 @@ import {
   Loader2,
   LogOut,
   Moon,
+  Send,
   ShieldCheck,
   Smartphone,
   Sparkles,
   Sun,
   Trash2,
+  Users,
   Wifi,
 } from 'lucide-react'
 import { DEFAULT_MODELS, type AISettingsInfo } from '../../shared/types'
@@ -86,6 +88,17 @@ export function SettingsPage() {
     queryKey: qk.auth,
     queryFn: () => api.auth.me(),
     retry: false,
+    staleTime: 60_000,
+  })
+
+  const currentUser = authQuery.data?.user ?? null
+  const isOwner = currentUser?.role === 'owner'
+  const telegramEnabled = Boolean(authQuery.data?.telegram_enabled)
+  const botUsername = authQuery.data?.telegram_bot_username?.replace(/^@/, '') || ''
+  const usersQuery = useQuery({
+    queryKey: qk.authUsers,
+    queryFn: () => api.auth.users(),
+    enabled: isOwner,
     staleTime: 60_000,
   })
 
@@ -293,6 +306,37 @@ export function SettingsPage() {
               </Badge>
             </div>
 
+            {!isOwner ? (
+              <div className="ai-readonly">
+                <div className="ai-key-status">
+                  <KeyRound size={15} />
+                  {configured ? (
+                    <span>
+                      ИИ подключён, ключ <strong>{aiSettings.data?.key_hint}</strong>
+                    </span>
+                  ) : (
+                    <span>ИИ не подключён — остальные функции работают как обычно.</span>
+                  )}
+                </div>
+                <div className="settings-about-list">
+                  <div className="settings-about-row">
+                    <span>Текстовая модель</span>
+                    <strong>{aiSettings.data?.text_model || '—'}</strong>
+                  </div>
+                  <div className="settings-about-row">
+                    <span>Модель для фото</span>
+                    <strong>{aiSettings.data?.vision_model || '—'}</strong>
+                  </div>
+                  <div className="settings-about-row">
+                    <span>Расшифровка голоса</span>
+                    <strong>{aiSettings.data?.stt_model || '—'}</strong>
+                  </div>
+                </div>
+                <p className="settings-footnote">
+                  Ключ и модели ИИ настраивает владелец кабинета.
+                </p>
+              </div>
+            ) : (
             <form className="ai-settings-form" onSubmit={submitAi}>
               <div className="ai-key-block">
                 <div className="ai-key-status">
@@ -455,10 +499,11 @@ export function SettingsPage() {
               )}
 
               <p className="settings-footnote">
-                Ключ хранится только в локальной базе на этом компьютере и не попадает в экспорт.
-                Запросы идут напрямую в OpenRouter.
+                Ключ хранится в базе приложения и не попадает в экспорт. Запросы идут напрямую в
+                OpenRouter.
               </p>
             </form>
+            )}
           </section>
 
           <section className="settings-card">
@@ -555,6 +600,70 @@ export function SettingsPage() {
               указаны ссылками, поэтому для полной копии сохрани ещё папку <code>data</code>.
             </p>
           </section>
+
+          {isOwner && (
+            <section className="settings-card">
+              <div className="settings-card-head">
+                <span className="settings-orb is-blue">
+                  <Users size={18} />
+                </span>
+                <div className="settings-card-head-copy">
+                  <h2>Пользователи</h2>
+                  <p>
+                    Кабинеты, созданные через Telegram-бота. Заметки, задачи и файлы каждого
+                    пользователя изолированы.
+                  </p>
+                </div>
+                <Badge tone="blue">{usersQuery.data?.length ?? 0}</Badge>
+              </div>
+
+              {usersQuery.isPending ? (
+                <div className="settings-state">
+                  <Loader2 size={16} className="spin" />
+                  Загружаю пользователей…
+                </div>
+              ) : usersQuery.isError ? (
+                <div className="settings-state is-error">
+                  <Info size={16} />
+                  Не удалось загрузить список.
+                </div>
+              ) : (
+                <ul className="settings-user-list">
+                  {usersQuery.data?.map((user) => (
+                    <li className="settings-user-row" key={user.id}>
+                      <span className="settings-user-avatar">
+                        {(user.name || user.login).slice(0, 1).toUpperCase()}
+                      </span>
+                      <span className="settings-user-copy">
+                        <strong>
+                          {user.name || user.login}
+                          {user.id === currentUser?.id && <em>это вы</em>}
+                        </strong>
+                        <span>
+                          Логин: {user.login}
+                          {user.telegram_username ? ` · Telegram @${user.telegram_username}` : ''}
+                          {' · '}
+                          {new Date(user.created_at).toLocaleDateString('ru-RU', {
+                            day: 'numeric',
+                            month: 'short',
+                            year: 'numeric',
+                          })}
+                        </span>
+                      </span>
+                      <Badge tone={user.role === 'owner' ? 'green' : 'neutral'}>
+                        {user.role === 'owner' ? 'владелец' : 'пользователь'}
+                      </Badge>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              <p className="settings-footnote">
+                Новый кабинет создаётся автоматически, когда человек пишет боту{' '}
+                <code>/start</code>. Пароль можно сбросить командой <code>/password</code>.
+              </p>
+            </section>
+          )}
         </div>
 
         <aside className="settings-aside">
@@ -643,9 +752,39 @@ export function SettingsPage() {
               </span>
               <div className="settings-card-head-copy">
                 <h2>Доступ</h2>
-                <p>Пароль защищает кабинет от чужих устройств в сети.</p>
+                <p>Аккаунты, способы входа и защита кабинета.</p>
               </div>
             </div>
+
+            {loggedIn && currentUser && (
+              <div className="settings-account">
+                <span className="settings-account-avatar">
+                  {(currentUser.name || currentUser.login).slice(0, 1).toUpperCase()}
+                </span>
+                <span className="settings-account-copy">
+                  <strong>
+                    {currentUser.name || currentUser.login}
+                    <em>{currentUser.role === 'owner' ? 'владелец' : 'пользователь'}</em>
+                  </strong>
+                  <span>
+                    Логин: {currentUser.login}
+                    {currentUser.telegram_username ? ` · Telegram @${currentUser.telegram_username}` : ''}
+                  </span>
+                </span>
+              </div>
+            )}
+
+            {telegramEnabled && botUsername && (
+              <a
+                className="btn btn-soft btn-small btn-block settings-bot-btn"
+                href={`https://t.me/${botUsername}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <Send size={14} />
+                Открыть бота @{botUsername}
+              </a>
+            )}
 
             {authPending ? (
               <div className="settings-access-row">
@@ -664,22 +803,26 @@ export function SettingsPage() {
                 </span>
                 <div className="settings-access-copy">
                   <strong>
-                    {googleEnabled
-                      ? passwordEnabled
-                        ? 'Google и пароль включены'
-                        : 'Вход через Google включён'
-                      : authRequired
-                        ? 'Вход по паролю включён'
-                        : 'Открытый доступ'}
+                    {telegramEnabled
+                      ? 'Вход через Telegram-бота'
+                      : googleEnabled
+                        ? passwordEnabled
+                          ? 'Google и пароль включены'
+                          : 'Вход через Google включён'
+                        : authRequired
+                          ? 'Вход по паролю включён'
+                          : 'Открытый доступ'}
                   </strong>
                   <span>
-                    {googleEnabled
-                      ? passwordEnabled
-                        ? 'Основной вход — через Google, пароль работает как резервный. Выйти можно на каждом устройстве отдельно.'
-                        : 'Доступ только для Google-аккаунта владельца кабинета. Выйти можно на каждом устройстве отдельно.'
-                      : authRequired
-                        ? 'Сессия хранится в защищённой cookie. Выйти можно на каждом устройстве отдельно.'
-                        : 'Любое устройство в этой сети может открыть приложение без пароля.'}
+                    {telegramEnabled
+                      ? 'Логин и пароль выдаёт бот. Команда /password сбрасывает пароль, если он потерялся.'
+                      : googleEnabled
+                        ? passwordEnabled
+                          ? 'Основной вход — через Google, пароль работает как резервный. Выйти можно на каждом устройстве отдельно.'
+                          : 'Доступ только для Google-аккаунта владельца кабинета. Выйти можно на каждом устройстве отдельно.'
+                        : authRequired
+                          ? 'Сессия хранится в защищённой cookie. Выйти можно на каждом устройстве отдельно.'
+                          : 'Любое устройство в этой сети может открыть приложение без пароля.'}
                   </span>
                 </div>
               </div>
@@ -698,7 +841,12 @@ export function SettingsPage() {
             )}
 
             <p className="settings-footnote">
-              {googleEnabled ? (
+              {telegramEnabled ? (
+                <>
+                  Бот работает через <code>TELEGRAM_BOT_TOKEN</code>. Новые кабинеты создаются
+                  автоматически; ограничить доступ можно списком <code>TELEGRAM_ALLOWED_IDS</code>.
+                </>
+              ) : googleEnabled ? (
                 <>
                   Google-вход задаётся переменными <code>GOOGLE_CLIENT_ID</code>,{' '}
                   <code>GOOGLE_CLIENT_SECRET</code> и <code>OWNER_EMAIL</code>.
