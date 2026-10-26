@@ -1,9 +1,13 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import type { NextFunction, Request, Response } from 'express'
+import { db } from './db'
 
 export const SESSION_COOKIE = 'brain_session'
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000
-const sessions = new Map<string, number>()
+
+function hashToken(token: string): string {
+  return createHash('sha256').update(token, 'utf8').digest('hex')
+}
 
 const failedAttempts = new Map<string, { count: number; resetAt: number }>()
 const MAX_ATTEMPTS = 20
@@ -38,23 +42,31 @@ export function isOwnerEmail(email: string): boolean {
 
 export function createSession(): string {
   const token = randomBytes(32).toString('hex')
-  sessions.set(token, Date.now() + SESSION_TTL_MS)
+  db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now())
+  db.prepare('INSERT INTO sessions (token_hash, expires_at, created_at) VALUES (?, ?, ?)').run(
+    hashToken(token),
+    Date.now() + SESSION_TTL_MS,
+    new Date().toISOString(),
+  )
   return token
 }
 
 export function isSessionValid(token: string | undefined | null): boolean {
   if (!token) return false
-  const expiresAt = sessions.get(token)
-  if (!expiresAt) return false
-  if (expiresAt < Date.now()) {
-    sessions.delete(token)
+  const tokenHash = hashToken(token)
+  const found = db.prepare('SELECT expires_at FROM sessions WHERE token_hash = ?').get(tokenHash) as
+    | { expires_at: number }
+    | undefined
+  if (!found) return false
+  if (Number(found.expires_at) < Date.now()) {
+    db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(tokenHash)
     return false
   }
   return true
 }
 
 export function destroySession(token: string | undefined | null): void {
-  if (token) sessions.delete(token)
+  if (token) db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(hashToken(token))
 }
 
 export function isAuthenticated(req: Request): boolean {
