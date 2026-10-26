@@ -9,6 +9,7 @@ import type {
   InboxItem,
   MediaFile,
   Note,
+  NotesAiEditResponse,
   SearchResponse,
   Task,
   WeekAnalytics,
@@ -112,6 +113,11 @@ export const api = {
     update: (id: string, input: Partial<Pick<Note, 'title' | 'body' | 'kind' | 'tags' | 'pinned'>>) =>
       request<Note>(`/api/notes/${id}`, { method: 'PATCH', body: JSON.stringify(input) }),
     remove: (id: string) => request<{ ok: boolean }>(`/api/notes/${id}`, { method: 'DELETE' }),
+    aiEdit: (noteIds: string[], instruction: string) =>
+      request<NotesAiEditResponse>('/api/notes/ai-edit', {
+        method: 'POST',
+        body: JSON.stringify({ noteIds, instruction }),
+      }),
     upload: (id: string, files: File[]) => {
       const form = new FormData()
       for (const file of files) form.append('files', file)

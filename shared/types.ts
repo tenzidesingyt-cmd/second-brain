@@ -73,6 +73,33 @@ export interface Note {
   updated_at: string
 }
 
+export interface NoteEditSnapshot {
+  title: string
+  body: string
+  kind: NoteKind
+  tags: string[]
+  pinned: boolean
+}
+
+export interface NoteEditChange {
+  id: string
+  summary: string
+  changed: boolean
+  before: NoteEditSnapshot
+}
+
+export interface NoteEditError {
+  id: string
+  title: string
+  error: string
+}
+
+export interface NotesAiEditResponse {
+  notes: Note[]
+  changes: NoteEditChange[]
+  errors: NoteEditError[]
+}
+
 export interface Task {
   id: string
   title: string
@@ -190,6 +217,9 @@ export interface AuthState {
 export interface AppSettings {
   theme: 'light' | 'dark' | 'system'
 }
+
+export const AI_EDIT_MAX_NOTES = 6
+export const AI_EDIT_MAX_INSTRUCTION = 2000
 
 export const NOTE_KIND_LABEL: Record<NoteKind, string> = {
   note: 'Заметка',

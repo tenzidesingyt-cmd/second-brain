@@ -15,6 +15,7 @@ import {
   ArrowLeft,
   Bold,
   Check,
+  CheckCircle2,
   Code2,
   Eye,
   FileQuestion,
@@ -28,12 +29,13 @@ import {
   PencilLine,
   Pin,
   Trash2,
+  Undo2,
   Upload,
   X,
 } from 'lucide-react'
-import type { MediaFile, Note, NoteKind } from '../../shared/types'
+import type { MediaFile, Note, NoteEditChange, NoteKind } from '../../shared/types'
 import { api } from '../lib/api'
-import { qk, useNote } from '../lib/hooks'
+import { qk, useAiSettings, useNote } from '../lib/hooks'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { formatFullDate, formatRelative, pluralRu } from '../lib/date'
 import { NOTE_KIND_META } from '../lib/meta'
@@ -41,6 +43,7 @@ import { useToast } from '../context/ToastContext'
 import { useConfirm } from '../context/ConfirmContext'
 import { Markdown } from '../components/Markdown'
 import { MediaGallery } from '../components/MediaGallery'
+import { AiEditComposer } from '../components/AiEditComposer'
 import { EmptyState, SectionLabel, Skeleton } from '../components/ui'
 
 interface NoteDraft {
@@ -85,6 +88,13 @@ export function NoteEditorPage() {
   const [saveState, setSaveState] = useState<SaveState>('saved')
   const [pane, setPane] = useState<EditorPane>('edit')
   const [uploadDragging, setUploadDragging] = useState(false)
+  const [aiPending, setAiPending] = useState(false)
+  const [aiError, setAiError] = useState<string | null>(null)
+  const [aiResult, setAiResult] = useState<NoteEditChange | null>(null)
+  const [aiUndoPending, setAiUndoPending] = useState(false)
+
+  const aiSettings = useAiSettings()
+  const aiReady = Boolean(aiSettings.data?.configured)
 
   const bodyRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -100,6 +110,10 @@ export function NoteEditorPage() {
   )
   const draftKey = useMemo(() => JSON.stringify(draft), [draft])
   const dirty = savedKey.current !== null && savedKey.current !== draftKey
+
+  useEffect(() => {
+    if (dirty) setAiResult(null)
+  }, [dirty])
 
   useEffect(() => {
     const note = noteQuery.data
@@ -136,6 +150,23 @@ export function NoteEditorPage() {
     },
   })
 
+  const applyNoteToEditor = useCallback((updated: Note) => {
+    setTitle(updated.title)
+    setBody(updated.body)
+    setKind(updated.kind)
+    setTags(updated.tags)
+    setPinned(updated.pinned)
+    savedKey.current = JSON.stringify({
+      title: updated.title,
+      body: updated.body,
+      kind: updated.kind,
+      tags: updated.tags,
+      pinned: updated.pinned,
+    })
+    failedKey.current = null
+    setSaveState('saved')
+  }, [])
+
   useEffect(() => {
     if (!id || !noteQuery.data || !dirty) return
     if (saveMutation.isPending) return
@@ -166,6 +197,65 @@ export function NoteEditorPage() {
     setSaveState('pending')
     saveMutation.mutate(draft)
   }, [id, noteQuery.data, saveMutation, dirty, draft, showToast])
+
+  const submitAiEdit = async (instruction: string) => {
+    if (!id) return false
+    if (saveMutation.isPending) {
+      showToast('Дождись сохранения заметки и попробуй снова.', 'info')
+      return false
+    }
+    setAiPending(true)
+    setAiError(null)
+    try {
+      if (dirty) {
+        failedKey.current = null
+        setSaveState('pending')
+        await saveMutation.mutateAsync(draft)
+      }
+      const response = await api.notes.aiEdit([id], instruction)
+      const updated = response.notes[0]
+      const change = response.changes[0]
+      if (updated) {
+        queryClient.setQueryData(qk.note(id), updated)
+        applyNoteToEditor(updated)
+        void queryClient.invalidateQueries({ queryKey: ['notes', 'list'] })
+      }
+      setAiResult(change || null)
+      if (change?.changed) {
+        showToast('ИИ обновил заметку.', 'success')
+      } else {
+        showToast('ИИ не нашёл, что изменить.', 'info')
+      }
+      return true
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Не удалось изменить заметку.'
+      setAiError(message)
+      showToast(message, 'error')
+      return false
+    } finally {
+      setAiPending(false)
+    }
+  }
+
+  const undoAiEdit = async () => {
+    if (!id || !aiResult?.changed) return
+    setAiUndoPending(true)
+    setAiError(null)
+    try {
+      const restored = await api.notes.update(id, aiResult.before)
+      queryClient.setQueryData(qk.note(id), restored)
+      applyNoteToEditor(restored)
+      void queryClient.invalidateQueries({ queryKey: ['notes', 'list'] })
+      setAiResult(null)
+      showToast('Изменения ИИ отменены.', 'success')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Не удалось вернуть прежний текст.'
+      setAiError(message)
+      showToast(message, 'error')
+    } finally {
+      setAiUndoPending(false)
+    }
+  }
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -388,6 +478,7 @@ export function NoteEditorPage() {
           <button
             className={`icon-btn editor-pin ${pinned ? 'is-active' : ''}`}
             onClick={() => setPinned((current) => !current)}
+            disabled={aiPending}
             title={pinned ? 'Открепить' : 'Закрепить'}
             aria-label={pinned ? 'Открепить заметку' : 'Закрепить заметку'}
           >
@@ -405,6 +496,7 @@ export function NoteEditorPage() {
             className="editor-title"
             value={title}
             onChange={(event) => setTitle(event.target.value)}
+            readOnly={aiPending}
             placeholder="Заголовок заметки"
             aria-label="Заголовок заметки"
             onKeyDown={(event) => {
@@ -442,6 +534,7 @@ export function NoteEditorPage() {
                     className="md-tool"
                     title={item.title}
                     aria-label={item.title}
+                    disabled={aiPending}
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => insertMarkdown(item.before, item.after, item.placeholder)}
                   >
@@ -458,6 +551,7 @@ export function NoteEditorPage() {
               className="editor-textarea"
               value={body}
               onChange={(event) => setBody(event.target.value)}
+              readOnly={aiPending}
               placeholder={'Пиши свободно. Поддерживается Markdown:\n\n## Заголовок\n- список\n- [ ] чек-лист\n**жирный** и `код`'}
               aria-label="Текст заметки"
               spellCheck
@@ -473,6 +567,48 @@ export function NoteEditorPage() {
               )}
             </div>
           </div>
+
+          <AiEditComposer
+            className="editor-ai-card"
+            contexts={[{ id: note.id, title: title.trim() || 'Без названия' }]}
+            onSubmit={submitAiEdit}
+            pending={aiPending}
+            aiReady={aiReady}
+            placeholder="Что изменить в этой заметке?"
+            hint="ИИ изменит только эту заметку. Черновик сохраняется перед отправкой."
+            error={aiError}
+          >
+            {aiResult && (
+              <div className="ai-edit-result">
+                <div className="ai-edit-result-head">
+                  <span
+                    className={`ai-edit-result-icon ${aiResult.changed ? 'is-success' : 'is-idle'}`}
+                  >
+                    <CheckCircle2 size={15} />
+                  </span>
+                  <strong>
+                    {aiResult.changed ? 'ИИ обновил заметку' : 'ИИ не нашёл, что изменить'}
+                  </strong>
+                  {aiResult.changed && (
+                    <button
+                      type="button"
+                      className="ai-edit-undo"
+                      onClick={() => void undoAiEdit()}
+                      disabled={aiUndoPending || dirty}
+                    >
+                      {aiUndoPending ? (
+                        <Loader2 size={12} className="spin" />
+                      ) : (
+                        <Undo2 size={12} />
+                      )}
+                      Вернуть
+                    </button>
+                  )}
+                </div>
+                <p className="ai-edit-result-text">{aiResult.summary}</p>
+              </div>
+            )}
+          </AiEditComposer>
 
           <div className="editor-footer">
             <span>
@@ -496,6 +632,7 @@ export function NoteEditorPage() {
                     type="button"
                     className={`kind-choice tone-${meta.tone} ${kind === option ? 'is-active' : ''}`}
                     onClick={() => setKind(option)}
+                    disabled={aiPending}
                   >
                     <span className="kind-choice-icon">
                       <Icon size={15} />
@@ -517,6 +654,7 @@ export function NoteEditorPage() {
                   <button
                     type="button"
                     onClick={() => setTags((current) => current.filter((item) => item !== tag))}
+                    disabled={aiPending}
                     aria-label={`Убрать тег ${tag}`}
                   >
                     <X size={11} />
@@ -529,6 +667,7 @@ export function NoteEditorPage() {
                 onChange={(event) => setTagInput(event.target.value)}
                 onKeyDown={onTagKeyDown}
                 onBlur={addTag}
+                disabled={aiPending}
                 placeholder={tags.length ? 'Ещё тег…' : 'Добавь тег'}
                 aria-label="Добавить тег"
               />
@@ -605,7 +744,7 @@ export function NoteEditorPage() {
             <button
               className="editor-delete"
               onClick={handleDelete}
-              disabled={deleteMutation.isPending}
+              disabled={deleteMutation.isPending || aiPending}
             >
               {deleteMutation.isPending ? (
                 <Loader2 size={15} className="spin" />
