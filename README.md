@@ -56,8 +56,8 @@ Vite поднимется на `http://localhost:5173` и будет прокс�
 2. В **APIs & Services → OAuth consent screen** выберите **External**, заполните название и email поддержки. В **Test users** добавьте свой Gmail.
 3. В **Credentials → Create credentials → OAuth client ID** выберите **Web application**.
 4. Добавьте адреса:
-   - **Authorized JavaScript origins:** `https://<домен>`
-   - **Authorized redirect URIs:** `https://<домен>/api/auth/google/callback`
+   - **Authorized JavaScript origins:** `https://second-brain-production-e19a.up.railway.app`
+   - **Authorized redirect URIs:** `https://second-brain-production-e19a.up.railway.app/api/auth/google/callback`
    - Для локальной проверки: `http://localhost:8787` и `http://localhost:8787/api/auth/google/callback`.
 5. Скопируйте **Client ID** и **Client secret**.
 6. Задайте переменные окружения:
@@ -65,11 +65,11 @@ Vite поднимется на `http://localhost:5173` и будет прокс�
 ```env
 GOOGLE_CLIENT_ID=...
 GOOGLE_CLIENT_SECRET=...
-GOOGLE_REDIRECT_URI=https://<домен>/api/auth/google/callback
+GOOGLE_REDIRECT_URI=https://second-brain-production-e19a.up.railway.app/api/auth/google/callback
 OWNER_EMAIL=your@gmail.com
 ```
 
-7. Перезапустите приложение.
+7. Перезапустите приложение. На Railway переменные добавляются в **Variables** сервиса, после сохранения сервис перезапускается сам.
 
 Пока приложение в режиме **Testing**, войти смогут только добавленные Test users. Для личного использования этого достаточно; чтобы пускать любой аккаунт владельца без ограничений, опубликуйте приложение (Publish app). Запрашиваемые scopes — только `openid`, `email`, `profile`, они не требуют дополнительной проверки Google.
 
@@ -91,9 +91,9 @@ GitHub Pages отдаёт только статические файлы. Это
 
 Рабочая схема: репозиторий на GitHub + хостинг с Node и постоянным диском, подключённый к этому репозиторию. Ниже — готовые варианты.
 
-### Вариант 1. Railway
+### Вариант 1. Railway (бесплатный план)
 
-Railway — основной вариант: контейнер работает постоянно, диск сохраняет SQLite и загрузки. После пробного периода тариф Hobby стоит около $5 в месяц.
+Railway Free даёт кредит около $1 в месяц, 1 vCPU и 0,5 ГБ RAM на сервис, диск 500 МБ и бесплатный домен `*.up.railway.app`. Этого хватает личному кабинету. При простое приложение засыпает, а первый запрос после паузы запускает его заново — это занимает несколько секунд, данные на диске сохраняются.
 
 1. Создайте проект **Deploy from GitHub repo** и выберите репозиторий.
 2. Добавьте **Volume** и смонтируйте его в `/app/data`.
@@ -105,7 +105,13 @@ Railway — основной вариант: контейнер работает
 4. Сгенерируйте домен в **Settings → Networking → Generate Domain**.
 5. Проверьте `https://<домен>/api/health`.
 
-Dockerfile собирается автоматически. Не запускайте несколько реплик: SQLite рассчитан на один экземпляр.
+Dockerfile собирается автоматически. Не запускайте несколько реплик: SQLite рассчитан на один экземпляр. Dockerfile не должен содержать `VOLUME` — Railway отклоняет такой образ, диск подключается через настройки сервиса.
+
+> Бесплатный лимит: если израсходовать $1 кредита, сервис остановится до следующего месяца. Для экономии включите **Serverless** в настройках сервиса — приложение будет спать после ~10 минут без запросов и не тратить кредит.
+
+### Готовый пример
+
+Действующее развёртывание: [second-brain-production-e19a.up.railway.app](https://second-brain-production-e19a.up.railway.app). Вход по паролю; Google-вход включается после добавления переменных ниже.
 
 ### Вариант 2. Render
 
